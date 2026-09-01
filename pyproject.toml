@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "naukri-profile-update"
+version = "0.1.0"
+description = "Cross-platform desktop app to view and update your Naukri profile (headless HTTP, no browser)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "PySide6>=6.8",
+    "requests>=2.31",
+    "httpcloak>=1.6",
+]
+
+[project.scripts]
+naukri-profile-update = "src.main:main"
+
+[tool.setuptools]
+packages = ["src", "src.ui", "src.core", "src.models"]
