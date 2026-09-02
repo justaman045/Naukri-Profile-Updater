@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - master
+    tags:
+      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -13,14 +15,21 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: NaukriProfileManager-windows
-            filename: NaukriProfileManager.exe
+            os_label: windows
+            arch: x86_64
+            path: dist/*.exe
           - os: ubuntu-latest
-            artifact: NaukriProfileManager-linux
-            filename: NaukriProfileManager
-          - os: macos-latest
-            artifact: NaukriProfileManager-macos
-            filename: NaukriProfileManager
+            os_label: linux
+            arch: x86_64
+            path: dist/NaukriProfileManager-*
+          - os: macos-15-intel
+            os_label: macos
+            arch: x86_64
+            path: dist/NaukriProfileManager-*
+          - os: macos-15
+            os_label: macos
+            arch: arm64
+            path: dist/NaukriProfileManager-*
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -33,11 +42,56 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pyinstaller
 
       - name: Build single-file executable
-        run: python build.py --onefile
+        run: python build.py --onefile --versioned --version "${{ github.ref_name }}"
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.filename }}
+          name: ${{ matrix.os_label }}-${{ matrix.arch }}
+          path: ${{ matrix.path }}
           if-no-files-found: error
+
+  release:
+    needs: build
+    # Only publish a GitHub Release when the run was triggered by a version tag.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all executables
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: false
+
+      - name: Flatten assets and write release notes
+        id: assets
+        shell: bash
+        run: |
+          mkdir -p assets
+          for f in $(find release-assets -type f); do
+            cp "$f" assets/
+          done
+          ls -1 assets
+          cat > NOTES.md <<'EOF'
+          Automated build of Naukri Profile Manager ${{ github.ref_name }}.
+
+          - Windows x86_64: `.exe`
+          - Linux x86_64
+          - macOS x86_64 (Intel)
+          - macOS arm64 (Apple Silicon)
+
+          Unsigned build — Windows SmartScreen and macOS Gatekeeper may warn; see README.
+          EOF
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "${{ github.ref_name }}" assets/* \
+            --repo "${{ github.repository }}" \
+            --title "Naukri Profile Manager ${{ github.ref_name }}" \
+            --notes-file NOTES.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

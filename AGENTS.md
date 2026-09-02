@@ -135,6 +135,9 @@ Naukri profile, fully headless over HTTP.
 ## Packaging gotchas
 
 - PyInstaller does **not** cross-compile: build each OS on that OS.
+- `build.py` supports `--onefile`, `--onedir`, and `--versioned` (renames the artifact to
+  `NaukriProfileManager-<ver>-<os>-<arch>[.exe]` using `--version` or `app_version()`; the
+  leading `v` is stripped, and `darwin`→`macos`). CI passes `--version "${{ github.ref_name }}"`.
 - `--paths ROOT` and `--windowed` in `build.py` are required (GUI, headless).
 - **httpcloak's native `.so`/`.dll`/`.dylib` is NOT auto-collected by PyInstaller.**
   `build.py` locates and `--add-binary`s it into `httpcloak/lib/` (matching httpcloak's
@@ -142,4 +145,11 @@ Naukri profile, fully headless over HTTP.
   app, that bundling step broke — do not remove it. Also, the `--add-binary` destination
   must be the bare directory `httpcloak/lib` (no trailing filename), or PyInstaller
   nests the file inside a subdirectory of its own name and loading fails.
+- **CI release pipeline** (`.github/workflows/build.yml`): a 4-job matrix builds
+  `windows-latest` (x86_64), `ubuntu-latest` (x86_64), `macos-15-intel` (x86_64) and
+  `macos-15` (arm64). Every push to `master` uploads short-lived artifacts only; every
+  `v*` tag push additionally runs a tag-gated `release` job (after all builds succeed)
+  that downloads all four and publishes a GitHub **Release** with permanent assets via
+  `gh release create ... --notes-file`. macOS-13 x64 is retired — use `macos-15-intel`
+  for Intel and `macos-15` for Apple Silicon.
 - Unsigned macOS builds show a Gatekeeper prompt (documented in README).

@@ -2,8 +2,10 @@
 """Build the Naukri Profile Manager into a standalone executable.
 
 Usage:
-    python build.py              # onedir (folder) — recommended
-    python build.py --onefile    # single executable
+    python build.py                          # onedir (folder) — recommended
+    python build.py --onefile                # single executable
+    python build.py --onefile --version v0.1.0         # versioned single file
+    python build.py --onefile --version v0.1.0 --versioned  # -> <name>-<ver>-<os>-<arch>
 
 NOTE: PyInstaller does NOT cross-compile. Build on Windows (for .exe),
 macOS (for .app), and Linux separately, each on its own OS.
@@ -25,9 +27,8 @@ sys.path.insert(0, str(ROOT))
 from src.core.version import DEVELOPER, app_version  # noqa: E402
 
 
-def _version_info(path: Path) -> None:
+def _version_info(path: Path, version: str) -> None:
     """Write a Windows VERSIONINFO file for --version-file."""
-    version = app_version()
     parts = (version.split(".") + ["0", "0"])[:4]
     while len(parts) < 4:
         parts.append("0")
@@ -94,7 +95,7 @@ def _httpcloak_lib() -> tuple[Path, str] | None:
     return None
 
 
-def build(onefile: bool) -> None:
+def build(*, onefile: bool, version: str, versioned: bool) -> Path:
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean",
@@ -113,7 +114,7 @@ def build(onefile: bool) -> None:
     # Embed app version metadata into the Windows executable / macOS bundle.
     with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
         version_info = Path(tmp) / "version_info.txt"
-        _version_info(version_info)
+        _version_info(version_info, version)
         cmd += ["--version-file", str(version_info)]
 
         # Optional app icon (root-level app.ico / app.icns / app.png).
@@ -137,9 +138,30 @@ def build(onefile: bool) -> None:
         subprocess.run(cmd, check=True, cwd=ROOT)
 
     dist = ROOT / "dist" / (NAME + (".exe" if system == "Windows" else ""))
+    if onefile and versioned:
+        dist = _rename_versioned(dist, version)
     print(f"\nBuild complete: {dist}")
     if not onefile:
         print("Distribution folder:", ROOT / "dist")
+    return dist
+
+
+def _rename_versioned(dist: Path, version: str) -> Path:
+    """Rename a onefile artifact to `Name-<ver>-<os>-<arch>`."""
+    cleaned = version.lstrip("v")
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    _OS_ALIASES = {"darwin": "macos", "windows": "windows", "linux": "linux"}
+    os_label = _OS_ALIASES.get(system, system)
+    arch = "x86_64" if machine in ("x86_64", "amd64") else (
+        "arm64" if machine in ("aarch64", "arm64") else machine
+    )
+    suffix = dist.suffix  # e.g. '.exe' or ''
+    stem = dist.stem  # 'NaukriProfileManager'
+    new_name = f"{stem}-{cleaned}-{os_label}-{arch}{suffix}"
+    new_path = dist.with_name(new_name)
+    dist.rename(new_path)
+    return new_path
 
 
 def _find_icon(system: str) -> Path | None:
@@ -163,6 +185,14 @@ def main() -> int:
         "--onefile", action="store_true",
         help="Build a single-file executable (slower startup) instead of a folder.",
     )
+    parser.add_argument(
+        "--versioned", action="store_true",
+        help="Rename the onefile artifact to Name-<version>-<os>-<arch> (implies --onefile).",
+    )
+    parser.add_argument(
+        "--version", default=None,
+        help="Version to embed/rename with (default: from pyproject.toml).",
+    )
     args = parser.parse_args()
 
     if not shutil.which("pyinstaller") and not (Path(sys.prefix) / "bin" / "pyinstaller").exists():
@@ -172,7 +202,9 @@ def main() -> int:
             check=True,
         )
 
-    build(onefile=args.onefile)
+    onefile = args.onefile or args.versioned
+    version = args.version or app_version()
+    build(onefile=onefile, version=version, versioned=args.versioned)
     return 0
 
 
