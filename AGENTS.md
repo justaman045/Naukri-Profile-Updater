@@ -153,3 +153,31 @@ Naukri profile, fully headless over HTTP.
   `gh release create ... --notes-file`. macOS-13 x64 is retired — use `macos-15-intel`
   for Intel and `macos-15` for Apple Silicon.
 - Unsigned macOS builds show a Gatekeeper prompt (documented in README).
+
+### CI/build pitfalls (learned the hard way)
+
+- **`build.py --version "${{ github.ref_name }}"` is dangerous on branch pushes.**
+  `github.ref_name` is `master` (branch) or `v0.1.0` (tag). `_version_info()` must
+  produce a **strictly-numeric 4-part** `filevers`/`prodvers`: PyInstaller `eval`s the
+  VERSIONINFO file as Python, so any non-numeric segment crashes with
+  `NameError: name '<x>' is not defined` (saw `v0` from `v0.1.0` before lstrip, and
+  `master` from a branch push). Keep the sanitizer that keeps only `.isdigit()` parts
+  padded to 4 (`build.py:_version_info`). Note this only bites Windows — Linux/macOS
+  don't deserialize VERSIONINFO.
+- **A green tag build does NOT mean a green branch build.** The tag run and the master
+  push run can finish differently (e.g. tag succeeded, branch failed on a flaky upload)
+  even for the same commit, because they're separate runs. Check the specific run, not
+  a sibling.
+- **`actions/upload-artifact@v4` has a transient `FinalizeArtifact 403` bug**:
+  `##[error]Failed to FinalizeArtifact: ... (403) Forbidden: Error from intermediary`.
+  It is NOT a build failure (PyInstaller already wrote the binary); the job fails at the
+  upload step. **Pin `actions/upload-artifact@v4.6.2`+** — the fix for it is in that
+  release. Don't chase `build.py` when you see it.
+- **`gh run upload` does NOT exist** (even gh 2.98). There is no gh CLI command to
+  upload artifacts from a workflow step; the only upload path is
+  `actions/upload-artifact`. Don't replace the action with a `gh` retry loop.
+- macOS-15 images deprecate Node 20 with a warning (`forced to run on Node 24`) for
+  `actions/checkout@v4`/`setup-python@v5`/`upload-artifact@v4` — harmless, expect it.
+- A PyInstaller Linux onefile build succeeds with "Library not found: libxcb-*.so"
+  **WARNING**s (Qt xcb platform deps missing on the runner). These are non-fatal for a
+  headless bundle — don't treat warnings as build failure.
