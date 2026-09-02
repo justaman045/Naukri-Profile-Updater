@@ -44,12 +44,25 @@ jobs:
       - name: Build single-file executable
         run: python build.py --onefile --versioned --version "${{ github.ref_name }}"
 
-      - name: Upload executable
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.os_label }}-${{ matrix.arch }}
-          path: ${{ matrix.path }}
-          if-no-files-found: error
+      - name: Upload executable (with retry)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          rc=1
+          for attempt in 1 2 3 4 5; do
+            echo "artifact upload attempt $attempt for ${{ matrix.os_label }}-${{ matrix.arch }}"
+            gh run upload "${{ matrix.os_label }}-${{ matrix.arch }}" \
+              --path "${{ matrix.path }}"
+            rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "artifact uploaded successfully"
+              break
+            fi
+            echo "upload failed (rc=$rc); retrying in ${attempt}s..."
+            sleep "$attempt"
+          done
+          exit "$rc"
 
   release:
     needs: build
