@@ -10,13 +10,17 @@ Pre-built executables are published as **GitHub Releases**. Every `vX.Y.Z` tag p
 triggers an automated build of all platforms — grab the latest from the
 [Releases page](https://github.com/justaman045/Naukri-Profile-Updater/releases/latest).
 
-| Platform            | Architecture    | File asset                                         |
-|---------------------|-----------------|----------------------------------------------------|
-| Windows             | x86_64          | `NaukriProfileManager-<ver>-windows-x86_64.exe`    |
-| Linux               | x86_64          | `NaukriProfileManager-<ver>-linux-x86_64`          |
-| macOS (Intel)       | x86_64          | `NaukriProfileManager-<ver>-macos-x86_64`          |
-| macOS (Apple Silicon) | arm64         | `NaukriProfileManager-<ver>-macos-arm64`           |
+| Platform            | Architecture    | File asset / download                                            |
+|---------------------|-----------------|------------------------------------------------------------------|
+| Windows             | x86_64          | [NaukriProfileManager-0.1.0-windows-x86_64.exe](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.1.0/NaukriProfileManager-0.1.0-windows-x86_64.exe) |
+| Linux               | x86_64          | [NaukriProfileManager-0.1.0-linux-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.1.0/NaukriProfileManager-0.1.0-linux-x86_64) |
+| macOS (Intel)       | x86_64          | [NaukriProfileManager-0.1.0-macos-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.1.0/NaukriProfileManager-0.1.0-macos-x86_64) |
+| macOS (Apple Silicon) | arm64         | [NaukriProfileManager-0.1.0-macos-arm64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.1.0/NaukriProfileManager-0.1.0-macos-arm64) |
 
+> The links above point at the current `v0.1.0` release. After each new tag, the
+> [Releases page](https://github.com/justaman045/Naukri-Profile-Updater/releases/latest)
+> always carries the newest per-OS executables.
+>
 > Builds are **unsigned** — Windows SmartScreen and macOS Gatekeeper may warn before
 > first run. On macOS, right-click the executable → **Open** if Gatekeeper blocks it.
 

@@ -28,13 +28,17 @@ from src.core.version import DEVELOPER, app_version  # noqa: E402
 
 
 def _version_info(path: Path, version: str) -> None:
-    """Write a Windows VERSIONINFO file for --version-file."""
+    """Write a Windows VERSIONINFO file for --version-file.
+
+    VERSIONINFO requires a strictly-numeric, 4-part file/product version
+    (PyInstaller evals the file as Python, so non-numeric fields crash with a
+    NameError). Accept any input like "v0.1.0" or even a branch name and
+    normalize it to four integers, defaulting missing parts to 0.
+    """
     version = version.lstrip("v")
-    parts = (version.split(".") + ["0", "0"])[:4]
-    while len(parts) < 4:
-        parts.append("0")
-    major, minor, patch, build = (str(p) for p in parts)
-    four = ", ".join([major, minor, patch, build])
+    digits = [p for p in version.split(".") if p.isdigit()]
+    parts = (digits + ["0", "0", "0", "0"])[:4]
+    four = ", ".join(parts)
     path.write_text(
         f"""VSVersionInfo(
   ffi=FixedFileInfo(
