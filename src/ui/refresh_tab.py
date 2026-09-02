@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 from src.core.naukri_client import NaukriManager, _refresh_filename
 from src.core.worker import ApiWorker
 from src.models.profile import Profile
+from src.ui._label_utils import make_wrapping_status_label
 
 
 class RefreshTab(QWidget):
@@ -17,10 +18,8 @@ class RefreshTab(QWidget):
         self.manager = manager
         self._worker: ApiWorker | None = None
 
-        self.preview_lbl = QLabel("-")
-        self.preview_lbl.setWordWrap(True)
-        self.status_lbl = QLabel("")
-        self.status_lbl.setWordWrap(True)
+        self.preview_lbl = make_wrapping_status_label("-")
+        self.status_lbl = make_wrapping_status_label()
 
         self.refresh_btn = QPushButton("Download, rename & re-upload resume")
         self.refresh_btn.clicked.connect(self._refresh)
@@ -30,10 +29,11 @@ class RefreshTab(QWidget):
         btn_row.addWidget(self.refresh_btn)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Keep your Naukri profile active: the app downloads "
-                                "your current resume, renames it in the "
-                                "`Name_Position_Month_Day_Updated.pdf` pattern, then "
-                                "re-uploads it as a fresh file."))
+        help_lbl = make_wrapping_status_label(
+            "Keep your Naukri profile active: the app downloads your current resume, "
+            "renames it in the `Name_Position_Month_Day_Updated.pdf` pattern, then "
+            "re-uploads it as a fresh file.")
+        layout.addWidget(help_lbl)
         layout.addWidget(QLabel("Next filename:"))
         layout.addWidget(self.preview_lbl)
         layout.addWidget(self.status_lbl)

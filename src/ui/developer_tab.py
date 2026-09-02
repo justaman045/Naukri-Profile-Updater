@@ -10,11 +10,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.ai_client import AiClient
+from src.core.ai_client import AiClient, field_max
 from src.core.naukri_client import NaukriManager
+from src.core.resume_text import ResumeTextError, extract_resume_text
 from src.core.settings import AppSettings
 from src.core.worker import ApiWorker
 from src.models.profile import Profile
+from src.ui._label_utils import make_wrapping_status_label
 
 
 class DeveloperTab(QWidget):
@@ -27,6 +29,7 @@ class DeveloperTab(QWidget):
         self.settings = settings
         self.profile: Profile | None = None
         self._worker: ApiWorker | None = None
+        self._resume_worker: ApiWorker | None = None
 
         self.title = QLabel("Experimental Developer Tools")
         self.title.setWordWrap(True)
@@ -44,25 +47,40 @@ class DeveloperTab(QWidget):
 
         self.resume_input = QPlainTextEdit()
         self.resume_input.setPlaceholderText(
-            "Paste your resume text here, or select a resume file / upload path. "
-            "(Resume source method to be finalized.)")
+            "Resume content is auto-loaded from your on-file Naukri resume. "
+            "You may edit it before generating.")
         self.resume_input.setMaximumHeight(140)
+
+        self.load_resume_btn = QPushButton("Reload from on-file resume")
+        self.load_resume_btn.clicked.connect(self._auto_load_resume)
+
+        resume_header = QHBoxLayout()
+        resume_header.addWidget(QLabel("Resume content (auto-loaded)"))
+        resume_header.addStretch(1)
+        resume_header.addWidget(self.load_resume_btn)
 
         self.result_edit = QPlainTextEdit()
         self.result_edit.setReadOnly(False)
         self.result_edit.setMaximumHeight(120)
+        self.result_edit.textChanged.connect(self._update_result_count)
+
+        self.result_count_lbl = QLabel("")
+        result_header = QHBoxLayout()
+        result_header.addWidget(QLabel("Generated result"))
+        result_header.addStretch(1)
+        result_header.addWidget(self.result_count_lbl)
 
         self.gen_btn = QPushButton("Generate optimized text")
         self.gen_btn.clicked.connect(self._generate)
         self.apply_btn = QPushButton("Apply to Edit tab")
         self.apply_btn.clicked.connect(self._apply)
         self.apply_btn.setEnabled(False)
-        self.ai_status = QLabel("")
-        self.ai_status.setWordWrap(True)
+        self.ai_status = make_wrapping_status_label()
 
         ai_form = QFormLayout()
         ai_form.addRow("Field", self.field_combo)
-        ai_form.addRow("Resume content", self.resume_input)
+        ai_form.addRow(resume_header)
+        ai_form.addRow(self.resume_input)
 
         gen_row = QHBoxLayout()
         gen_row.addStretch(1)
@@ -75,6 +93,7 @@ class DeveloperTab(QWidget):
         ai_layout.addWidget(ai_hint)
         ai_layout.addLayout(ai_form)
         ai_layout.addWidget(self.gen_btn)
+        ai_layout.addLayout(result_header)
         ai_layout.addWidget(self.result_edit)
         ai_layout.addLayout(apply_row)
         ai_layout.addWidget(self.ai_status)
@@ -93,6 +112,7 @@ class DeveloperTab(QWidget):
     def set_profile(self, profile: Profile) -> None:
         self.profile = profile
         self._load_current()
+        self._auto_load_resume()
 
     def _load_current(self) -> None:
         if not self.profile:
@@ -102,6 +122,42 @@ class DeveloperTab(QWidget):
             self.result_edit.setPlainText(self.profile.headline or "")
         else:
             self.result_edit.setPlainText(self.profile.summary or "")
+        self._update_result_count()
+
+    def _update_result_count(self) -> None:
+        field = self.field_combo.currentText()
+        max_len = field_max(field)
+        n = len(self.result_edit.toPlainText())
+        if not max_len:
+            self.result_count_lbl.setText(f"{n} chars")
+            self.result_count_lbl.setStyleSheet("")
+            return
+        over = n > max_len
+        self.result_count_lbl.setText(f"{n} / {max_len}")
+        self.result_count_lbl.setStyleSheet("color: red;" if over else "")
+
+    def _auto_load_resume(self) -> None:
+        """Download and extract the on-file resume text in the background."""
+        if self._resume_worker and self._resume_worker.isRunning():
+            return
+        self.load_resume_btn.setEnabled(False)
+        self.ai_status.setText("Downloading & extracting on-file resume...")
+        self._resume_worker = ApiWorker(lambda: extract_resume_text(self.manager))
+        self._resume_worker.succeeded.connect(self._on_resume_loaded)
+        self._resume_worker.failed.connect(self._on_resume_error)
+        self._resume_worker.start()
+
+    def _on_resume_loaded(self, text: str) -> None:
+        self.load_resume_btn.setEnabled(True)
+        self.resume_input.setPlainText(text)
+        self.ai_status.setText(
+            f"Resume content loaded from your on-file resume ({len(text)} chars). "
+            "You may edit it before generating.")
+
+    def _on_resume_error(self, exc: Exception) -> None:
+        self.load_resume_btn.setEnabled(True)
+        msg = exc.args[0] if exc.args else str(exc)
+        self.ai_status.setText(f"{msg} You can paste text manually.")
 
     def _generate(self) -> None:
         resume = self.resume_input.toPlainText().strip()
@@ -113,7 +169,9 @@ class DeveloperTab(QWidget):
         client = AiClient(self.settings)
         self.gen_btn.setEnabled(False)
         self.ai_status.setText("Generating...")
-        self._worker = ApiWorker(lambda: client.rewrite(field, current))
+        self._worker = ApiWorker(
+            lambda: client.rewrite(field, current, resume_text=resume)
+        )
         self._worker.succeeded.connect(self._on_generated)
         self._worker.failed.connect(self._on_ai_error)
         self._worker.start()
@@ -123,6 +181,7 @@ class DeveloperTab(QWidget):
         self.result_edit.setPlainText(text)
         self.apply_btn.setEnabled(True)
         self.ai_status.setText("")
+        self._update_result_count()
 
     def _on_ai_error(self, exc: Exception) -> None:
         self.gen_btn.setEnabled(True)
@@ -131,10 +190,17 @@ class DeveloperTab(QWidget):
     def _apply(self) -> None:
         from src.ui.main_window import MainWindow
 
+        field = self.field_combo.currentText()
+        text = self.result_edit.toPlainText()
+        max_len = field_max(field)
+        if max_len and len(text) > max_len:
+            self.ai_status.setText(
+                f"Cannot apply: {field} is {len(text)} chars (over the {max_len} "
+                "limit). Trim it in the result box first.")
+            self.result_count_lbl.setStyleSheet("color: red;")
+            return
         parent = self.window()
         if isinstance(parent, MainWindow):
-            text = self.result_edit.toPlainText()
-            field = self.field_combo.currentText()
             if field == "Headline":
                 parent.edit_tab.headline.setText(text)
             else:

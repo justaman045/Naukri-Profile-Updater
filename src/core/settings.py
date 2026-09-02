@@ -5,6 +5,43 @@ from src.core.session_store import APP_DIR
 
 CONFIG_FILE = APP_DIR / "config.json"
 
+# Provider keys considered to use the local Ollama server (localhost:11434).
+_OLLAMA_PROVIDERS = {"ollama"}
+
+
+def base_url_misconfig(provider: str, base_url: str) -> str | None:
+    """Return an actionable message if provider/base_url are inconsistent.
+
+    The real risk is a stale base URL pointing at the local Ollama server while
+    a non-Ollama provider is selected (the app never falls back to Ollama on its
+    own). Returns None when the combination is consistent.
+    """
+    url = (base_url or "").rstrip("/")
+    if not url:
+        if provider not in _OLLAMA_PROVIDERS and provider:
+            return (
+                "Base URL is empty. Set it in the Settings tab for this provider."
+            )
+        return None
+    is_ollama_url = _looks_like_ollama(url)
+    if is_ollama_url and provider not in _OLLAMA_PROVIDERS:
+        return (
+            f"Selected provider is '{provider}' but the Base URL points at the "
+            f"local Ollama server ({url}). Fix the Base URL in Settings."
+        )
+    return None
+
+
+def _looks_like_ollama(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+
+        parts = urlparse(url)
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower()
+    return host in ("localhost", "127.0.0.1") and parts.port in (None, 11434)
+
 DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",

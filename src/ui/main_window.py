@@ -8,6 +8,7 @@ from src.ui.edit_tab import EditTab
 from src.ui.refresh_tab import RefreshTab
 from src.ui.settings_tab import SettingsTab
 from src.ui.developer_tab import DeveloperTab
+from src.ui.about_tab import AboutTab
 
 
 class MainWindow(QMainWindow):
@@ -25,12 +26,14 @@ class MainWindow(QMainWindow):
         self.refresh_tab = RefreshTab(manager)
         self.settings_tab = SettingsTab(self.settings)
         self.developer_tab = DeveloperTab(manager, self.settings)
+        self.about_tab = AboutTab(manager)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self.profile_tab, "Profile")
         self.tabs.addTab(self.edit_tab, "Edit")
         self.tabs.addTab(self.refresh_tab, "Refresh")
         self.tabs.addTab(self.settings_tab, "Settings")
+        self.tabs.addTab(self.about_tab, "About")
         self._dev_index: int | None = None
         self.setCentralWidget(self.tabs)
 

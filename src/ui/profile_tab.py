@@ -2,8 +2,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
-    QLabel,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from src.core.naukri_client import NaukriManager
 from src.core.worker import ApiWorker
 from src.models.profile import Profile
+from src.ui._label_utils import make_wrapping_form_label
 
 
 class ProfileTab(QWidget):
@@ -19,24 +20,20 @@ class ProfileTab(QWidget):
         self.manager = manager
         self._worker: ApiWorker | None = None
 
-        self.name_lbl = QLabel("-")
-        self.headline_lbl = QLabel("-")
-        self.headline_lbl.setWordWrap(True)
-        self.summary_lbl = QLabel("-")
-        self.summary_lbl.setWordWrap(True)
-        self.skills_lbl = QLabel("-")
-        self.skills_lbl.setWordWrap(True)
-        self.position_lbl = QLabel("-")
-        self.experience_lbl = QLabel("-")
-        self.expected_ctc_lbl = QLabel("-")
-        self.current_ctc_lbl = QLabel("-")
-        self.notice_lbl = QLabel("-")
-        self.city_lbl = QLabel("-")
-        self.email_lbl = QLabel("-")
-        self.phone_lbl = QLabel("-")
-        self.resume_lbl = QLabel("-")
-        self.resume_lbl.setWordWrap(True)
-        self.pid_lbl = QLabel("-")
+        self.name_lbl = make_wrapping_form_label("-")
+        self.headline_lbl = make_wrapping_form_label("-")
+        self.summary_lbl = make_wrapping_form_label("-")
+        self.skills_lbl = make_wrapping_form_label("-")
+        self.position_lbl = make_wrapping_form_label("-")
+        self.experience_lbl = make_wrapping_form_label("-")
+        self.expected_ctc_lbl = make_wrapping_form_label("-")
+        self.current_ctc_lbl = make_wrapping_form_label("-")
+        self.notice_lbl = make_wrapping_form_label("-")
+        self.city_lbl = make_wrapping_form_label("-")
+        self.email_lbl = make_wrapping_form_label("-")
+        self.phone_lbl = make_wrapping_form_label("-")
+        self.resume_lbl = make_wrapping_form_label("-")
+        self.pid_lbl = make_wrapping_form_label("-")
 
         form = QFormLayout()
         form.addRow("Name", self.name_lbl)
@@ -55,17 +52,24 @@ class ProfileTab(QWidget):
         form.addRow("Profile ID", self.pid_lbl)
         form.setLabelAlignment(Qt.AlignRight)
 
+        self.form_widget = QWidget()
+        self.form_widget.setLayout(form)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll.setWidget(self.form_widget)
+
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.refresh)
-        self.status_lbl = QLabel("")
+        self.status_lbl = make_wrapping_form_label()
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         btn_row.addWidget(self.refresh_btn)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addStretch(1)
+        layout.addWidget(self.scroll)
         layout.addWidget(self.status_lbl)
         layout.addLayout(btn_row)
 

@@ -37,6 +37,52 @@ Naukri profile, fully headless over HTTP.
   downloads the on-file PDF, renames it to `Name_Position_Month_Day_Updated.pdf`
   (e.g. `Aman_Ojha_Software_Developer_September_1_Updated.pdf`) and re-uploads it.
   The renaming helper `_refresh_filename()` lives in `src/core/naukri_client.py`.
+- Resume **text extraction** for the AI optimizer: `src/core/resume_text.py`
+  (`extract_resume_text(manager)`) downloads the on-file resume via
+  `manager.download_resume()` and extracts its full text with **pypdf** (`PdfReader` +
+  `extract_text` per page, all pages joined — no truncation). **PDF only**: non-PDF
+  formats and PDFs with no extractable text (scanned/image PDFs, no OCR) raise
+  `ResumeTextError`. The Developer tab auto-loads this text into its editable
+  `resume_input` on a background `ApiWorker` (human-verifiable, editable).
+- `AiClient.rewrite(field_name, current_value, resume_text="")` — passes the resume
+  text to the model wrapped in `===== BEGIN/END RESUME =====` markers inside the
+  prompt (empty resume falls back to the old prompt). This is the source the AI
+  optimizer's rewrite is based on; it is NOT just a gate check (old bug: resume text
+  was required but never sent).
+- **Naukri per-field char limits** live in `FIELD_LIMITS` (a `{field: (min, max)}` map,
+  helper `field_max()`) in `src/core/ai_client.py`. Verified: **Headline (0, 250)**,
+  **Summary (50, 1000)** — the 1000 max comes from a live HTTP-400 save record; 250
+  headline is corroborated by Naukri guides. `rewrite()` puts the exact min/max into
+  the prompt and instructs the model to target **90-100%** of the budget, then
+  **auto-clips** the returned text to the max (`text[:max].strip()`). The Developer tab
+  shows a **live `N / max` counter** (red when over) and **blocks Apply** if the result
+  exceeds the field's max. Update `FIELD_LIMITS` in one place to change prompt + clip.
+- **AI chat response parsing** in `ai_client.py` is defensive: `_parse_json_body` +
+  `_provider_error_message` detect a provider `{"error": {"message": ...}}` envelope even
+  on HTTP 200 and surface it; `_extract_choice_text` accepts assistant `content` as a
+  plain string **or** a list of `{type, text}` blocks (OpenRouter/Gemini/multimodal).
+  Any malformed/unparseable body raises a short `AiError` ("AI request failed"/"Unexpected
+  AI response from provider") with at most a **200-char snippet** — never the full raw body.
+- **Status/error QLabels must never force the window wider.** Long unbreakable text in a
+  `wordWrap` QLabel with default policy balloons the window (QLabel has no space to wrap).
+  Use `src/ui/_label_utils.make_wrapping_status_label()` (horizontal `QSizePolicy.Ignored`
+  + `wordWrap`) for box-layout status labels (Developer/Settings/Refresh). **But `Ignored`
+  breaks a `QFormLayout` row height**: Qt then under-sizes the row and vertically clips the
+  wrapped text (first line cut, last line hidden). The **Profile tab** value labels therefore
+  use `make_wrapping_form_label()` (horizontal `QSizePolicy.Preferred`). Both helpers build a
+  `WrappingValueLabel` (a `QLabel` subclass that overrides `heightForWidth()` to return the
+  true wrapped height from `fontMetrics`), because Qt's `QLabel.heightForWidth` is unreliable
+  for wrapped text in `QFormLayout`/`QScrollArea`. The Profile form also sits inside a
+  `QScrollArea` so a long Summary/Skills doesn't overflow the window bottom.
+- **The AI client NEVER falls back to Ollama.** It uses `settings.ai_provider` verbatim.
+  The only Ollama-specific logic is `_provider_requires_key()`/`ai_configured` treating
+  Ollama as the lone key-less provider. Guardrail: `settings.base_url_misconfig(provider,
+  base)` (in `src/core/settings.py`) returns an actionable message if a non-Ollama
+  provider has a base URL pointing at the local Ollama server (localhost/127.0.0.1:
+  11434). `AiClient.rewrite()` and `AiClient.list_models()` call it up front and raise a
+  short `AiError` instead of sending data to Ollama. Provider→URL defaults live in a
+  single `settings.DEFAULT_BASE_URLS` map (the Settings tab imports it; do NOT duplicate
+  a `_DEFAULT_BASE_URLS` literal there).
 - `Profile.from_raw` in `src/models/profile.py` tolerates dict, `{dashBoard: ...}`
   and a single-element list `[{...}]` (which is what `fullprofiles` responses use).
 - **httpcloak stores cookies as a `list` of `Cookie` objects, not a
@@ -50,10 +96,17 @@ Naukri profile, fully headless over HTTP.
   (Bearer `nauk_at` token + cookies).
 - App settings (Developer toggle + AI provider) live in `~/.naukri-profile-update/config.json`,
   managed by `src/core/settings.py` (`AppSettings` + `load_settings`/`save_settings`).
-- The UI has a **Settings** tab (always visible) and a **Developer** tab that is
-  **hidden unless** `settings.show_developer` is enabled (toggled in the Settings tab).
-  `DeveloperTab` holds experimental tools; the first is an **AI field optimizer** that
-  rewrites a chosen profile field using `src/core/ai_client.py`.
+- The UI has a **Settings** tab (always visible), an **About** tab (always visible, at
+  the end) and a **Developer** tab that is **hidden unless** `settings.show_developer`
+  is enabled (toggled in the Settings tab). When shown, Developer appends **after**
+  About (tab-order independent). `DeveloperTab` holds experimental tools; the first is
+  an **AI field optimizer** that rewrites a chosen profile field using `src/core/ai_client.py`.
+- **App version/metadata** live in `src/core/version.py` (`APP_NAME`, `DEVELOPER`,
+  `LICENSE`, `CREDITS`, `app_version()`). `app_version()` reads `[project] version`
+  from `pyproject.toml` when running from source and falls back to a hardcoded
+  `_FALLBACK_VERSION` in a frozen build (pyproject.toml is not bundled). Keep the
+  fallback and `pyproject.toml` in sync on release. `build.py` imports it to generate a
+  Windows `--version-file`, and the About tab uses it for the Version row.
 - `AiClient` is provider-agnostic with two chat paths: **OpenAI-compatible**
   `{base_url}/chat/completions` (OpenAI, Google Gemini, OpenRouter, Ollama,
   custom/LiteLLM) and **native Anthropic** `{base_url}/messages` (Claude).

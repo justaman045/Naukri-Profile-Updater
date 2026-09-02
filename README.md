@@ -17,7 +17,11 @@ Everything runs over HTTP using Naukri's reverse-engineered internal services.
   configure an AI provider (base URL, API key) for the field optimizer. The **Model**
   dropdown auto-fetches the provider's available models so you just pick one.
 - **Developer** (hidden by default, enable in Settings) — experimental AI optimizer
-  that rewrites a profile field (headline/summary) using your chosen provider.
+  that rewrites a profile field (headline/summary) using your chosen provider. The
+  optimizer automatically downloads and **loads your on-file resume's full text** into
+  an editable box so the AI drafts the rewrite from your real experience, and it
+  **respects Naukri's per-field character limits** (Headline ≤250, Summary 50–1000),
+  aiming for ~90-100% of the budget and showing a live character counter.
 - **Persistent session** — you stay logged in across launches until your token/IP changes.
 
 ## Stack
@@ -27,6 +31,7 @@ Everything runs over HTTP using Naukri's reverse-engineered internal services.
   HTTP interaction (login, update profile, resume upload) plus custom read-profile
   (`fetch_profile`, using the rich `v2/users/self` endpoint) and resume download
   (`v1/users/self/profiles/{id}/resume`) additions that upstream doesn't provide.
+- **pypdf** for extracting resume PDF text (feeds the AI optimizer).
 - **PyInstaller** for packaging.
 
 ## Setup
@@ -53,6 +58,32 @@ python build.py --onefile          # single executable (slower startup)
 `.app` on macOS, and the Linux binary on Linux. Unsigned macOS builds trigger a
 Gatekeeper "Open anyway" prompt (right-click → Open).
 
+`build.py` embeds the app version (from `pyproject.toml`) into the executable's
+File Properties and uses `app.ico`/`app.icns`/`app.png` as the icon when present.
+
+### Windows `.exe`
+
+On a Windows machine, either run:
+
+```bat
+build_windows.bat
+```
+
+or manually:
+
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt pyinstaller
+python build.py --onefile
+```
+
+The single-file executable is written to `dist\NaukriProfileManager.exe`.
+
+A **GitHub Actions workflow** (`.github/workflows/build.yml`) also exists: push the
+repo to GitHub and run the "Build executables" workflow to get Windows `.exe` and
+macOS `.app` artifacts built on hosted runners.
+
 ## ⚠️ Important Naukri constraints
 
 - **No public API.** This app uses Naukri's internal, undocumented services. They can
@@ -77,6 +108,7 @@ src/
 │   ├── session_store.py  # Persist/load/clear the saved session
 │   ├── settings.py       # App settings (Developer toggle + AI provider) -> config.json
 │   ├── ai_client.py      # Provider-agnostic OpenAI-compatible chat client (AI optimizer)
+│   ├── resume_text.py    # Extract on-file resume PDF text for the AI optimizer
 │   ├── worker.py         # QThread wrapper for blocking network calls
 │   └── nope_ri/          # Vendored NopeRi client (relative-import edits applied)
 └── models/profile.py     # Profile dataclass + response parser

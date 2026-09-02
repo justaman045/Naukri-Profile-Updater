@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPushButton,
     QVBoxLayout,
@@ -14,17 +13,9 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.ai_client import AiClient, _provider_requires_key
-from src.core.settings import AppSettings, PROVIDER_LABELS, save_settings
+from src.core.settings import AppSettings, DEFAULT_BASE_URLS, PROVIDER_LABELS, save_settings
 from src.core.worker import ApiWorker
-
-_DEFAULT_BASE_URLS = {
-    "openai": "https://api.openai.com/v1",
-    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
-    "claude": "https://api.anthropic.com/v1",
-    "ollama": "http://localhost:11434/v1",
-    "openrouter": "https://openrouter.ai/api/v1",
-    "custom": "",
-}
+from src.ui._label_utils import make_wrapping_status_label
 
 
 class SettingsTab(QWidget):
@@ -87,8 +78,7 @@ class SettingsTab(QWidget):
 
         self.save_btn = QPushButton("Save Settings")
         self.save_btn.clicked.connect(self._save)
-        self.status_lbl = QLabel("")
-        self.status_lbl.setWordWrap(True)
+        self.status_lbl = make_wrapping_status_label()
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
@@ -119,7 +109,7 @@ class SettingsTab(QWidget):
 
     def _on_provider_changed(self) -> None:
         key = self.provider_combo.currentData()
-        dflt = _DEFAULT_BASE_URLS.get(key, "")
+        dflt = DEFAULT_BASE_URLS.get(key, "")
         base = self.base_url.text().strip()
         if dflt and (not base or base == self.settings.effective_base_url):
             self.base_url.setText(dflt)

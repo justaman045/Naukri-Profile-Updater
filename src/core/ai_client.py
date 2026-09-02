@@ -2,7 +2,7 @@ import json
 
 import requests
 
-from src.core.settings import AppSettings
+from src.core.settings import AppSettings, base_url_misconfig
 
 ANTHROPIC_VERSION = "2023-06-01"
 
@@ -17,12 +17,80 @@ SYSTEM_PROMPT = (
     "for recruiters. Return only the rewritten text, nothing else."
 )
 
+# Naukri per-field character limits (verified: web sources + live save HTTP-400 record).
+# Each value is (min, max); a field with no min uses 0.
+FIELD_LIMITS = {
+    "Headline": (0, 250),
+    "Summary": (50, 1000),
+}
+
+
+def field_max(field_name: str) -> int:
+    """Return the Naukri max character length for a field (0 if unknown)."""
+    limits = FIELD_LIMITS.get(field_name, (0, 0))
+    return limits[1]
+
+
 # Providers whose chat completes via the OpenAI-compatible /chat/completions path.
 _OPENAI_COMPAT_PROVIDERS = {"openai", "gemini", "openrouter", "custom", "ollama"}
 
 
 def _provider_requires_key(provider: str) -> bool:
     return provider != "ollama"
+
+
+def _provider_error_message(payload) -> str | None:
+    """Extract a human-friendly error message from a provider response body."""
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if isinstance(error, dict):
+        msg = error.get("message")
+        if msg:
+            return str(msg)
+        msg = error.get("type")
+        if msg:
+            return str(msg)
+        return None
+    if isinstance(error, str) and error:
+        return error
+    detail = payload.get("detail")
+    if isinstance(detail, str) and detail:
+        return detail
+    if isinstance(detail, dict):
+        msg = detail.get("message")
+        if msg:
+            return str(msg)
+        if detail.get("msg"):
+            return str(detail["msg"])
+    return None
+
+
+def _extract_choice_text(message: object) -> str:
+    """Return the assistant text from an OpenAI-compatible message.
+
+    Handles ``content`` as a plain string or a list of ``{type, text}`` blocks
+    (multimodal / some providers). Raises if nothing recognizable is found.
+    """
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            blocks = []
+            for block in content:
+                if isinstance(block, dict):
+                    text = block.get("text") or block.get("content")
+                    if isinstance(text, str) and text:
+                        blocks.append(text)
+                elif isinstance(block, str) and block:
+                    blocks.append(block)
+            if blocks:
+                return "\n".join(blocks)
+        text = message.get("text")
+        if isinstance(text, str):
+            return text
+    raise ValueError("assistant message has no text content")
 
 
 class AiClient:
@@ -62,6 +130,11 @@ class AiClient:
         """Fetch available model IDs from the configured provider."""
         if not self.settings.effective_base_url:
             raise AiError("AI is not configured. Set a base URL in the Settings tab.")
+        mismatch = base_url_misconfig(
+            self.settings.ai_provider, self.settings.effective_base_url
+        )
+        if mismatch:
+            raise AiError(mismatch)
 
         key = (self.settings.ai_provider, self.settings.effective_base_url,
                self.settings.ai_api_key)
@@ -107,21 +180,76 @@ class AiClient:
     # ------------------------------------------------------------------
     # Chat
     # ------------------------------------------------------------------
-    def rewrite(self, field_name: str, current_value: str) -> str:
+    def rewrite(self, field_name: str, current_value: str,
+                resume_text: str = "") -> str:
         if not self.settings.ai_configured:
             raise AiError(
                 "AI is not configured. Set a base URL, model and (if required) an "
                 "API key in the Settings tab."
             )
+        mismatch = base_url_misconfig(
+            self.settings.ai_provider, self.settings.effective_base_url
+        )
+        if mismatch:
+            raise AiError(mismatch)
+        resume_block = (
+            "My current resume (full text):\n"
+            "===== BEGIN RESUME =====\n"
+            f"{resume_text}\n"
+            "===== END RESUME =====\n"
+            if resume_text.strip()
+            else ""
+        )
+        limits = FIELD_LIMITS.get(field_name, (0, 0))
+        min_len, max_len = limits
+        if max_len:
+            limit_lines = [
+                f"- Maximum length: {max_len} characters (do NOT exceed this).",
+            ]
+            if min_len:
+                limit_lines.append(f"- Minimum length: {min_len} characters.")
+            limit_lines.append(
+                f"- Aim to use roughly 90-100% of the {max_len}-character budget with "
+                "keyword-rich, ATS-friendly content. No filler, no padding, no "
+                "explanations."
+            )
+            limit_rule = "\n".join(limit_lines)
+        else:
+            limit_rule = (
+                "Keep it concise and within the platform limit for this field; use "
+                "keywords, no filler, no explanations."
+            )
         prompt = (
             f"Rewrite the '{field_name}' field for my Naukri profile.\n"
-            f"Current value: {current_value!r}\n\n"
-            "Rules: keep it under the platform limit for this field, use keywords, "
-            "no filler, no explanations."
+            f"{resume_block}"
+            f"Current {field_name} value: {current_value!r}\n\n"
+            "Requirements for this field on Naukri:\n"
+            f"{limit_rule}"
         )
-        if self.settings.ai_provider == "claude":
-            return self._claude_rewrite(prompt)
-        return self._openai_compat_rewrite(prompt)
+        text = self._openai_compat_rewrite(prompt) \
+            if self.settings.ai_provider != "claude" else self._claude_rewrite(prompt)
+        if max_len and len(text) > max_len:
+            text = text[:max_len].strip()
+        return text
+
+    @staticmethod
+    def _parse_json_body(res: requests.Response) -> dict:
+        try:
+            data = res.json()
+        except (json.JSONDecodeError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _build_error(prefix: str, res: requests.Response, parsed: dict) -> str:
+        status = res.status_code
+        msg = _provider_error_message(parsed)
+        if msg:
+            return f"{prefix} ({status}): {msg}"
+        snippet = (res.text or "").strip().replace("\n", " ")[:200]
+        if snippet:
+            return f"{prefix} ({status}): {snippet}"
+        return f"{prefix} (HTTP {status})."
 
     def _openai_compat_rewrite(self, prompt: str) -> str:
         url = f"{self.settings.effective_base_url}/chat/completions"
@@ -136,12 +264,15 @@ class AiClient:
         res = requests.post(
             url, headers=self._openai_headers(), json=payload, timeout=self.timeout
         )
-        if not res.ok:
-            raise AiError(f"AI request failed ({res.status_code}): {res.text[:300]}")
+        parsed = self._parse_json_body(res)
+        if not res.ok or _provider_error_message(parsed) is not None:
+            raise AiError(self._build_error("AI request failed", res, parsed))
         try:
-            return res.json()["choices"][0]["message"]["content"].strip()
-        except (TypeError, KeyError, IndexError, json.JSONDecodeError) as exc:
-            raise AiError(f"Unexpected AI response: {res.text[:300]}") from exc
+            choices = parsed["choices"]
+            content = _extract_choice_text(choices[0].get("message"))
+            return content.strip()
+        except (TypeError, KeyError, IndexError, AttributeError, ValueError) as exc:
+            raise AiError(self._build_error("Unexpected AI response from provider", res, parsed)) from exc
 
     def _claude_rewrite(self, prompt: str) -> str:
         url = f"{self.settings.effective_base_url}/messages"
@@ -156,13 +287,21 @@ class AiClient:
         res = requests.post(
             url, headers=self._claude_headers(), json=payload, timeout=self.timeout
         )
-        if not res.ok:
-            raise AiError(f"AI request failed ({res.status_code}): {res.text[:300]}")
+        parsed = self._parse_json_body(res)
+        if not res.ok or _provider_error_message(parsed) is not None:
+            raise AiError(self._build_error("AI request failed", res, parsed))
         try:
-            content = res.json()["content"]
-            return "".join(block.get("text", "") for block in content).strip()
-        except (TypeError, KeyError, json.JSONDecodeError) as exc:
-            raise AiError(f"Unexpected AI response: {res.text[:300]}") from exc
+            content = parsed["content"]
+            if isinstance(content, str):
+                return content.strip()
+            if isinstance(content, list):
+                return "".join(
+                    block.get("text", "") for block in content
+                    if isinstance(block, dict) and block.get("text")
+                ).strip()
+            raise ValueError("claude content has unexpected shape")
+        except (TypeError, KeyError, AttributeError, ValueError) as exc:
+            raise AiError(self._build_error("Unexpected AI response from provider", res, parsed)) from exc
 
     def _claude_max_tokens(self) -> int:
         try:
