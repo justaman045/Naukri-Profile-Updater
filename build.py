@@ -29,6 +29,7 @@ from src.core.version import DEVELOPER, app_version  # noqa: E402
 
 def _version_info(path: Path, version: str) -> None:
     """Write a Windows VERSIONINFO file for --version-file."""
+    version = version.lstrip("v")
     parts = (version.split(".") + ["0", "0"])[:4]
     while len(parts) < 4:
         parts.append("0")
