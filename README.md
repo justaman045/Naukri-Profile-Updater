@@ -80,9 +80,9 @@ python build.py --onefile
 
 The single-file executable is written to `dist\NaukriProfileManager.exe`.
 
-A **GitHub Actions workflow** (`.github/workflows/build.yml`) also exists: push the
-repo to GitHub and run the "Build executables" workflow to get Windows `.exe` and
-macOS `.app` artifacts built on hosted runners.
+A **GitHub Actions workflow** (`.github/workflows/build.yml`) builds Windows `.exe`,
+Linux binary and macOS `.app` **on every push to `master`** (and manually via the
+"Build executables" workflow), then uploads each as a downloadable artifact.
 
 ## ⚠️ Important Naukri constraints
 
