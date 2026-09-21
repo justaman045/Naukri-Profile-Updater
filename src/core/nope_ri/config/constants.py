@@ -37,4 +37,18 @@ FORM_KEY_PATTERNS = [
     re.compile(r'"formKey"\s*:\s*"([A-Za-z0-9]{8,})"'),
 ]
 
+# The profile-page resume uploader (bundle `mnj_v<NNN>.min.js`) declares its key
+# as `c="attachCV",d="<key>"`. This is a DIFFERENT key from the chat uploader in
+# `app_v<NNN>.min.js` (`this.formKey="<key>"`); using the wrong one makes the
+# filevalidation upload return a fake/honeypot key that the advResume attach
+# cannot resolve (404 "Received 404 from OCS Service"). Extract the attachCV one.
+RESUME_FORM_KEY_PATTERNS = [
+    re.compile(r'["\']attachCV["\']\s*,\s*[A-Za-z_$][\w$]*\s*=\s*["\']([A-Za-z0-9]{8,})["\']'),
+]
+
 APP_JS_PATTERN = re.compile(r'<script[^>]+src="([^"]*app_v\d+\.min\.js[^"]*)"')
+
+# The app bundle carries a version map: `_c={app:"_v470",mnj:"_v323",...}`.
+# The profile resume uploader's JS lives in `mnj_v<NNN>.min.js`; read NNN here
+# so we can build the current bundle URL (the version rotates).
+MNJ_VERSION_PATTERN = re.compile(r'mnj\s*:\s*["\']_?v(\d+)["\']')

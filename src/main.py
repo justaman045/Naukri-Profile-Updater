@@ -55,13 +55,20 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Naukri Profile Manager")
 
-    manager = _resolve_manager()
-    if manager is None:
-        return 0  # user cancelled login
+    # Loop so that logging out can return to the login dialog without the user
+    # having to restart the app. Closing the window ends the loop.
+    while True:
+        manager = _resolve_manager()
+        if manager is None:
+            return 0  # user cancelled login
 
-    window = MainWindow(manager)
-    window.show()
-    return app.exec()
+        window = MainWindow(manager)
+        window.show()
+        app.exec()
+
+        if not window.relogin_requested:
+            return 0
+        window.deleteLater()
 
 
 if __name__ == "__main__":

@@ -137,5 +137,6 @@ class NaukriManager:
         self._require_auth()
         result = self.client.update_resume(stream)
         if result.status_code != 200:
-            raise NaukriParseError(f"resume re-upload failed ({result.status_code})")
+            detail = str(result.raw_response)[:200] if result.raw_response else ""
+            raise NaukriParseError(f"resume re-upload failed ({result.status_code}) {detail}".strip())
         return new_name

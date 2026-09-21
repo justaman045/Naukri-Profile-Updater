@@ -23,23 +23,25 @@ def cookies_to_dict(session) -> dict:
     cookies = getattr(session, "cookies", [])
     if isinstance(cookies, list):
         return {c.name: c.value for c in cookies}
+    if isinstance(cookies, dict):
+        return dict(cookies)
     return dict(cookies.get_dict())
 
 
 def set_cookies(session, cookies: dict) -> None:
     """Re-inject persisted {name: value} cookies into the session.
 
-    For the httpcloak list backend we append Cookie objects; for the
-    requests CookieJar backend we call `.update()`.
+    httpcloak exposes a native `set_cookie(...)` that persists into the C
+    session handle; it is the only path that survives. The `.cookies`
+    attribute is a copy-on-read view, so appending to it is a silent no-op.
+    For the requests CookieJar backend we call `.update()`.
     """
-    import httpcloak.client as hc
-    jar = getattr(session, "cookies", [])
-    if isinstance(jar, list):
-        existing = {c.name for c in jar}
+    setter = getattr(session, "set_cookie", None)
+    if setter is not None:
         for name, value in cookies.items():
-            if name in existing:
-                continue
-            jar.append(hc.Cookie(name=name, value=value, domain=".naukri.com",
-                                 path="/", secure=True, same_site="Lax"))
-    else:
+            setter(name, value, domain=".naukri.com", path="/",
+                   secure=True, same_site="Lax")
+        return
+    jar = getattr(session, "cookies", [])
+    if not isinstance(jar, list):
         jar.update(cookies)

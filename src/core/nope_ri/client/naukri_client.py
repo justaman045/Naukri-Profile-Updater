@@ -1,5 +1,6 @@
 import logging
 import random
+import re
 import time
 import functools
 from io import BytesIO
@@ -7,7 +8,7 @@ from .session import build_session
 from ..config.constants import *
 from ..exceptions.exceptions import *
 from ..models.models import *
-from ..utils.extractors import extract_form_key2, extract_all_js_urls
+from ..utils.extractors import extract_form_key2, extract_resume_form_key, extract_all_js_urls
 import requests
 from ..utils.request_helper import with_exponential_retry
 from ..utils.cookies import get_cookie, cookies_to_dict
@@ -79,6 +80,14 @@ UPLOAD_HEADERS = {
     "origin": "https://www.naukri.com",
     "referer": "https://www.naukri.com/",
     "systemid": "fileupload",
+}
+
+_JS_FETCH_HEADERS = {
+    "user-agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+    ),
+    "accept": "*/*",
 }
 
 OTP_HEADERS = {
@@ -271,7 +280,10 @@ class NaukriLoginClient:
 
     @with_exponential_retry(label="get_js")
     def _fetch_js(self, js_url):
-        return self.session.get(js_url)
+        # Static CDN asset (no auth, no bot gate). Use plain requests rather than
+        # httpcloak: the shared session serves these from its cache as a
+        # `304 Not Modified` with an EMPTY body, which silently hides the JS.
+        return requests.get(js_url, headers=_JS_FETCH_HEADERS, timeout=30)
 
     def get_form_key(self):
         if not self.naukri_session:
@@ -301,6 +313,51 @@ class NaukriLoginClient:
     def _fetch_profile_html_auth(self):
         return self.session.get(PROFILE_URL, headers=self._build_headers(auth=True))
 
+    @staticmethod
+    def _normalize_js_url(js_url: str) -> str:
+        if js_url.startswith("//"):
+            return "https:" + js_url
+        if js_url.startswith("/"):
+            return "https://www.naukri.com" + js_url
+        return js_url
+
+    def _scan_bundles_for_form_key(self, html: str) -> str | None:
+        """Return the profile resume uploader's formKey.
+
+        The resume uploader lives in ``mnj_v<NNN>.min.js`` (declared as
+        ``c="attachCV",d="<key>"``) — a DIFFERENT key from the app shell's chat
+        uploader (``this.formKey="<key>"``). The profile HTML only references the
+        app bundle, so we read the bundle-version map ``_c={...,mnj:"_v<NNN>"}``
+        from the app bundle and then fetch the matching ``mnj_v<NNN>`` bundle.
+        """
+        js_urls = [self._normalize_js_url(u) for u in extract_all_js_urls(html)]
+        app_url = next((u for u in js_urls if "app_v" in u), None)
+
+        if app_url:
+            try:
+                app_js = self._fetch_js(app_url).text
+                key = extract_resume_form_key(app_js)
+                if key:
+                    return key
+                version = MNJ_VERSION_PATTERN.search(app_js)
+                if version:
+                    mnj_url = re.sub(r"app_v\d+", "mnj_v" + version.group(1), app_url)
+                    key = extract_resume_form_key(self._fetch_js(mnj_url).text)
+                    if key:
+                        return key
+            except Exception:
+                pass
+
+        # Fallback: generic scan of every script on the page.
+        for js_url in js_urls:
+            try:
+                key = extract_form_key2(self._fetch_js(js_url).text)
+            except Exception:
+                continue
+            if key:
+                return key
+        return None
+
     def get_form_key2(self):
         if not self.naukri_session:
             raise NaukriAuthError("Login first")
@@ -308,33 +365,23 @@ class NaukriLoginClient:
         if "form_key" in self.cache:
             return self.cache["form_key"]
 
-        res = self._fetch_profile_html_auth()
-        html = res.text
-        js_urls = extract_all_js_urls(html)
-
-        for js_url in js_urls:
-            if "mnj" not in js_url:
-                continue
-            if js_url.startswith("//"):
-                js_url = "https:" + js_url
-            try:
-                js_content = self._fetch_js(js_url).text
-                key = extract_form_key2(js_content)
-                if key:
-                    self.cache["form_key"] = key
-                    return key
-            except Exception:
-                continue
-
+        pages = []
         try:
-            fallback_url = "https://static.naukimg.com/s/5/105/j/mnj_v299.min.js"
-            js_content = self._fetch_js(fallback_url).text
-            key = extract_form_key2(js_content)
+            pages.append(self._fetch_profile_html_auth().text)
+        except Exception:
+            pass
+        # The public page carries the same JS bundles, so it is a useful
+        # fallback when the authenticated page is empty or missing scripts.
+        try:
+            pages.append(self._fetch_profile_html().text)
+        except Exception:
+            pass
+
+        for html in pages:
+            key = self._scan_bundles_for_form_key(html or "")
             if key:
                 self.cache["form_key"] = key
                 return key
-        except Exception:
-            pass
 
         raise NaukriParseError("formKey2 not found")
 
@@ -394,7 +441,7 @@ class NaukriLoginClient:
 
     @with_exponential_retry(label="validate_file")
     def _validate_file_request(self, filename, file_bytes, form_key, file_key):
-        return requests.post(
+        return self.session.post(
             FILE_VALIDATION_URL,
             headers=UPLOAD_HEADERS,
             files={"file": (filename, BytesIO(file_bytes), "application/pdf")},
@@ -434,7 +481,7 @@ class NaukriLoginClient:
             return [file_key, form_key]
 
         if file_key not in resp_json:
-            return [next(iter(resp_json)), form_key]
+            return [next(iter(resp_json), file_key), form_key]
 
         return [file_key, form_key]
 
@@ -462,7 +509,11 @@ class NaukriLoginClient:
 
         payload = {"textCV": {"formKey": form_key, "fileKey": file_key}}
         res = self._update_resume_request(url, headers, payload)
-        return ResumeUpdateResult(pid, res.json(), res.status_code)
+        try:
+            body = res.json()
+        except Exception:
+            body = {"_non_json_body": res.text[:200]}
+        return ResumeUpdateResult(pid, body, res.status_code)
 
     # ------------------------------------------------------------------
     # Profile update

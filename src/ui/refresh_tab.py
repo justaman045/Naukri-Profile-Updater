@@ -12,6 +12,27 @@ from src.models.profile import Profile
 from src.ui._label_utils import make_wrapping_status_label
 
 
+def _friendly_refresh_error(exc: Exception) -> str:
+    """Translate a low-level refresh failure into an actionable message."""
+    msg = str(exc)
+    low = msg.lower()
+    if "formkey" in low:
+        return ("Naukri changed its resume upload page and the upload key could "
+                "not be read. Log out and sign in again, then retry. If it keeps "
+                "happening, the app needs an update.")
+    if "401" in msg or "auth" in low or "not logged in" in low or "session" in low:
+        return ("Your session has expired. Use File > Logout and sign in again, "
+                "then retry.")
+    if "no resume" in low:
+        return "No resume is currently on file on Naukri to refresh."
+    if "ocs service" in low:
+        return ("Naukri accepted the upload but its file store (OCS) would not "
+                "register the file. This happens because the upload endpoint now "
+                "requires a real browser context. The resume was NOT changed. "
+                "Please update your resume from naukri.com in a browser.")
+    return msg or type(exc).__name__
+
+
 class RefreshTab(QWidget):
     def __init__(self, manager: NaukriManager, parent: QWidget | None = None):
         super().__init__(parent)
@@ -58,4 +79,4 @@ class RefreshTab(QWidget):
 
     def _on_error(self, exc: Exception) -> None:
         self.refresh_btn.setEnabled(True)
-        self.status_lbl.setText(f"Refresh failed: {exc}")
+        self.status_lbl.setText(f"Refresh failed: {_friendly_refresh_error(exc)}")

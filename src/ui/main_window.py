@@ -20,6 +20,7 @@ class MainWindow(QMainWindow):
         self.resize(760, 600)
         self._fetch_worker: ApiWorker | None = None
         self._last_profile = None
+        self.relogin_requested = False
 
         self.profile_tab = ProfileTab(manager)
         self.edit_tab = EditTab(manager)
@@ -96,7 +97,14 @@ class MainWindow(QMainWindow):
     def _logout(self) -> None:
         self.manager.logout()
         self.statusBar().showMessage("Logged out.")
-        QMessageBox.information(self, "Logged Out", "Your Naukri session has been cleared.")
+        QMessageBox.information(
+            self, "Logged Out",
+            "Your Naukri session has been cleared. Please log in again.",
+        )
+        # Ask the app to show the login dialog again instead of leaving a
+        # manager with no session behind.
+        self.relogin_requested = True
+        self.close()
 
     def closeEvent(self, event):
         # Allow in-flight workers to finish; the process will exit naturally.

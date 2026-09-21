@@ -6,10 +6,12 @@ Naukri profile, fully headless over HTTP.
 ## Commands
 
 - Install deps: `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
-- Run the app: `python src/main.py` (or `pip install -e . && naukri-profile-update`)
-- Headless UI smoke test: `QT_QPA_PLATFORM=offscreen python -c "from src.ui.main_window import MainWindow; ..."`
-- Build executable: `source .venv/bin/activate && python build.py` (add `--onefile` for single file)
-- No lint/test/typecheck tooling is configured.
+- Run the app: `python src/main.py` (or `pip install -e . && naukri-profile-update`). The venv guard
+  in `src/main.py` aborts when not in a virtualenv, so run everything inside `.venv`.
+- Headless UI import smoke test (run in the venv): `QT_QPA_PLATFORM=offscreen python -c "from src.ui.main_window import MainWindow"`
+- Build executable: `python build.py` (add `--onefile` for a single file; `--versioned` implies
+  `--onefile`). `build.py` auto-installs PyInstaller into the active interpreter if it is missing.
+- No lint/test/typecheck tooling is configured — do not invent `pytest`/`ruff` commands.
 
 ## Key architecture facts (would cost time to rediscover)
 
@@ -37,6 +39,56 @@ Naukri profile, fully headless over HTTP.
   downloads the on-file PDF, renames it to `Name_Position_Month_Day_Updated.pdf`
   (e.g. `Aman_Ojha_Software_Developer_September_1_Updated.pdf`) and re-uploads it.
   The renaming helper `_refresh_filename()` lives in `src/core/naukri_client.py`.
+- **Resume upload's formKey is the `attachCV` key from the `mnj_v<NNN>` bundle, scraped
+  live — never hardcoded.** There are TWO uploader keys on a page and they are different:
+  the app-shell chat uploader declares `this.formKey="<key>"` in `app_v<NNN>.min.js`, while
+  the **profile resume uploader** declares `c="attachCV",d="<key>"` in `mnj_v<NNN>.min.js`.
+  Using the wrong one makes the filevalidation upload return a honeypot echo and the
+  `advResume` attach answer `404 "Received 404 from OCS Service"`. `get_form_key2()`
+  (`src/core/nope_ri/client/naukri_client.py`) reads the profile HTML, finds the `app_v`
+  bundle, reads the version map `_c={app:"_v470",mnj:"_v323",...}` (regex
+  `MNJ_VERSION_PATTERN`, `constants.py`) and fetches `mnj_v<NNN>.min.js`, then applies
+  `RESUME_FORM_KEY_PATTERNS` via `extract_resume_form_key` (`utils/extractors.py`).
+  On `formKey2 not found`, inspect the current `mnj_v*` bundle and update that pattern.
+  Do NOT re-add a hardcoded bundle URL or version.
+- **`_fetch_js()` must use plain `requests`, not the httpcloak session.** The shared
+  httpcloak session caches static CDN assets and serves them as `304 Not Modified` with an
+  **empty body**, so the scraped JS silently comes back blank (`formKey2 not found`). The
+  bundles are public CDN files with no bot gate, so `requests.get(..., _JS_FETCH_HEADERS)` is correct.
+
+- **`set_cookies()` must use httpcloak's native `session.set_cookie(...)`.** The previous
+  implementation appended to `session.cookies`, which is a **copy-on-read property** — a
+  silent no-op. Result: restored sessions carried ZERO cookies, so every cookie-gated
+  endpoint failed (`GET /mnjuser/profile` -> redirected to the login page, and
+  `/mnjapi/*` -> `401 code 4012 "Invalid scheme name"`). With `set_cookie` the same
+  session loads the real profile page and `GET /mnjapi/v4/dashBoard` -> 200 (the
+  cookies-only mnjapi auth is the definitive check). **Do not regress this.**
+  (`cookies_to_dict` reads httpcloak's `List[Cookie]`; `get_cookie` likewise.)
+- **`/mnjapi/*` auth is COOKIE-based, not header-based.** Sending `Authorization: Bearer
+  <nauk_at>` to mnjapi actually triggers `401 4012 "Invalid scheme name"`; sending NO
+  Authorization (cookies only) authenticates. The cloudgateway APIs are the opposite
+  (Authorization Bearer, cookies optional). `formKey` is scraped from the `mnj_v<NNN>` bundle
+  (see the formKey bullet above).
+- **Resume re-upload (RESOLVED 2026-09-21):** the whole flow now works headlessly and is
+  verified end-to-end (`refresh_resume()` changes `cvInfo.uploadDate`). The fix was the
+  **formKey**: the resume uploader uses the `attachCV` key from `mnj_v<NNN>.min.js`, not the
+  app-shell chat key from `app_v<NNN>.min.js` (see the formKey bullet above). With the
+  correct key, `POST https://filevalidation.naukri.com/file` stores the file and the
+  subsequent `POST .../resman-aggregator-services/v0/users/self/profiles/{pid}/advResume`
+  (`x-http-method-override: PUT`, body
+  `{"textCV":{"formKey","fileKey","textCvContent":null}}`) returns
+  `200 {"description":"Request completed successfully","status":true}`. The uploader sends
+  the file as multipart with fields `formKey`, `file`, `fileName`, `uploadCallback:"true"`,
+  `fileKey` (appId is a HEADER `appId:105` + `systemId:fileupload`, not a form field).
+  Notes: the URL template MUST be `.format(profile_id=pid)` (a missing `.format` sends the
+  literal `{profile_id}` -> `400 invalid profileid/...`); `_validate_file_request` MUST use
+  the httpcloak session (browser-like TLS), not plain `requests`; a 404 "OCS Service" means
+  the fileKey/formKey pair was wrong (honeypot echo), not a network problem. Session tokens
+  are 1h-TTL; after expiry the attach fails with an empty `401` (check `exp` first).
+  Historical dead ends (do NOT re-walk): `POST /file/external` returns an OCS-style
+  `U<32 hex>` key but attaching it still 404s; `/mnjapi/v1|v2/advResume` return `500`;
+  `//files.naukri.com/0/saveFile.php` / `saveUrlFile.php` are dead (503/504).
+
 - Resume **text extraction** for the AI optimizer: `src/core/resume_text.py`
   (`extract_resume_text(manager)`) downloads the on-file resume via
   `manager.download_resume()` and extracts its full text with **pypdf** (`PdfReader` +
@@ -83,8 +135,9 @@ Naukri profile, fully headless over HTTP.
   short `AiError` instead of sending data to Ollama. Provider→URL defaults live in a
   single `settings.DEFAULT_BASE_URLS` map (the Settings tab imports it; do NOT duplicate
   a `_DEFAULT_BASE_URLS` literal there).
-- `Profile.from_raw` in `src/models/profile.py` tolerates dict, `{dashBoard: ...}`
-  and a single-element list `[{...}]` (which is what `fullprofiles` responses use).
+- `Profile.from_raw` in `src/models/profile.py` tolerates the rich `{user, profile: [...]}`
+  shape, a bare dict, `{dashBoard: ...}`, and a single-element list `[{...}]` (the
+  `fullprofiles` response shape).
 - **httpcloak stores cookies as a `list` of `Cookie` objects, not a
   `RequestsCookieJar`.** The vendored NopeRi assumed `session.cookies.get(name)`,
   `.update()`, `.get_dict()` — all broken under httpcloak. Access cookies only via
