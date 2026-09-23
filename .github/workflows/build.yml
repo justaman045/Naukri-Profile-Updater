@@ -150,6 +150,12 @@ jobs:
           for f in $(find release-assets -type f); do
             cp "$f" assets/
           done
+          # Ship the Linux binary as a .zip too: browsers often stall on the
+          # 90MB extensionless raw file, and the zip preserves the exec bit.
+          linux=$(ls assets | grep -- '-linux-x86_64$' | head -1 || true)
+          if [ -n "$linux" ]; then
+            (cd assets && zip -q "${linux}.zip" "$linux")
+          fi
           ls -1 assets
           prev=$(git ls-remote --tags origin | sed -n 's#.*refs/tags/\(v[0-9.]*\)$#\1#p' | grep -v "^v$NEXT$" | sort -V | tail -1 || true)
           {

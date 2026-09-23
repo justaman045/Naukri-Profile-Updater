@@ -13,13 +13,18 @@ triggers an automated build of all platforms — grab the latest from the
 | Platform            | Architecture    | File asset / download                                            |
 |---------------------|-----------------|------------------------------------------------------------------|
 | Windows             | x86_64          | [NaukriProfileManager-0.2.0-windows-x86_64.exe](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-windows-x86_64.exe) |
-| Linux               | x86_64          | [NaukriProfileManager-0.2.0-linux-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-linux-x86_64) |
+| Linux               | x86_64          | [NaukriProfileManager-0.2.0-linux-x86_64.zip](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-linux-x86_64.zip) · [raw binary](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-linux-x86_64) |
 | macOS (Intel)       | x86_64          | [NaukriProfileManager-0.2.0-macos-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-macos-x86_64) |
 | macOS (Apple Silicon) | arm64         | [NaukriProfileManager-0.2.0-macos-arm64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-macos-arm64) |
 
 > The links above point at the current `v0.2.0` release. After each new tag, the
 > [Releases page](https://github.com/justaman045/Naukri-Profile-Updater/releases/latest)
 > always carries the newest per-OS executables.
+>
+> **Linux:** if your browser stalls on the download, use the terminal instead —
+> `gh release download --repo justaman045/Naukri-Profile-Updater --pattern '*-linux-*'`
+> or `curl -LO https://github.com/justaman045/Naukri-Profile-Updater/releases/latest/download/NaukriProfileManager-0.2.0-linux-x86_64.zip`.
+> Then `unzip`, `chmod +x NaukriProfileManager-*-linux-x86_64`, and run it.
 >
 > Builds are **unsigned** — Windows SmartScreen and macOS Gatekeeper may warn before
 > first run. On macOS, right-click the executable → **Open** if Gatekeeper blocks it.

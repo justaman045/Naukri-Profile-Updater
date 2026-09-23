@@ -169,8 +169,12 @@ Naukri profile, fully headless over HTTP.
   `LICENSE`, `CREDITS`, `app_version()`). `app_version()` reads `[project] version`
   from `pyproject.toml` when running from source and falls back to a hardcoded
   `_FALLBACK_VERSION` in a frozen build (pyproject.toml is not bundled). Keep the
-  fallback and `pyproject.toml` in sync on release. `build.py` imports it to generate a
-  Windows `--version-file`, and the About tab uses it for the Version row.
+  fallback and `pyproject.toml` in sync on release. **`build._embed_fallback_version()`
+  additionally rewrites `_FALLBACK_VERSION` to the `--version` being built right before
+  PyInstaller runs** (no-op when equal), so the About tab inside the executable matches
+  the artifact name — the CI build matrix runs *before* the release job bumps the repo,
+  so without this a v0.2.0 binary would embed 0.1.0. `build.py` imports `app_version()`
+  to generate a Windows `--version-file`, and the About tab uses it for the Version row.
 - `AiClient` is provider-agnostic with two chat paths: **OpenAI-compatible**
   `{base_url}/chat/completions` (OpenAI, Google Gemini, OpenRouter, Ollama,
   custom/LiteLLM) and **native Anthropic** `{base_url}/messages` (Claude).
@@ -214,6 +218,16 @@ Naukri profile, fully headless over HTTP.
   app, that bundling step broke — do not remove it. Also, the `--add-binary` destination
   must be the bare directory `httpcloak/lib` (no trailing filename), or PyInstaller
   nests the file inside a subdirectory of its own name and loading fails.
+- **PySide6's Qt6 shared libraries are NOT reliably collected by default hooks.**
+  Since PySide6 6.9-ish the Qt6 DLLs/.so live under `PySide6/Qt/lib/` with
+  versioned sonames (`libQt6Core.so.6` / `Qt6Core.dll`), plus the `shiboken6`
+  loader. A plain `build.py --onefile` produced Windows exes that die at startup
+  with `ImportError: DLL load failed while importing QtWidgets: Module not found`
+  (`main.py:30`, the `QApplication` import). `build.py` therefore passes
+  **`--collect-all PySide6 --collect-all shiboken6`** (the officially recommended
+  PySide6+PyInstaller bundling). Cost: artifact roughly doubles. Do not remove
+  those flags and don't "optimize" to a targeted `--add-binary` for `Qt/lib`
+  unless verified on all three OSes.
 - **CI release pipeline** (`.github/workflows/build.yml`): a 4-job matrix builds
   `windows-latest` (x86_64), `ubuntu-latest` (x86_64), `macos-15-intel` (x86_64) and
   `macos-15` (arm64). **Every push to `master` auto-releases**: the `build` jobs
@@ -223,7 +237,9 @@ Naukri profile, fully headless over HTTP.
   Download table/URLs to the new version, commits that as
   `chore(release): v<NEXT> [skip ci]` (the `[skip ci]` is what stops the workflow
   re-triggering on its own commit), pushes tag `v<NEXT>`, and publishes a GitHub
-  Release with the four artifacts via `gh release create ... --notes-file`.
+  Release via `gh release create ... --notes-file`. Browsers stall on the ~90MB
+  extensionless Linux binary, so the release job ALSO ships a
+  `NaukriProfileManager-<ver>-linux-x86_64.zip` of it (zip preserves the exec bit).
   `workflow_dispatch` builds artifacts only unless its `release` input is set.
   macOS-13 x64 is retired — use `macos-15-intel` for Intel and `macos-15` for
   Apple Silicon.

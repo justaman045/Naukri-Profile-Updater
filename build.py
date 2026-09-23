@@ -12,6 +12,7 @@ macOS (for .app), and Linux separately, each on its own OS.
 """
 import argparse
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,29 @@ NAME = "NaukriProfileManager"
 # Adapted import so this helper also works when run from a frozen toolchain.
 sys.path.insert(0, str(ROOT))
 from src.core.version import DEVELOPER, app_version  # noqa: E402
+
+
+def _embed_fallback_version(version: str) -> None:
+    """Pin the About-tab version in frozen builds.
+
+    Frozen apps have no ``pyproject.toml``, so ``app_version()`` reads
+    ``_FALLBACK_VERSION`` from ``src/core/version.py``. That source file must
+    carry the version actually being built, otherwise the About tab shows a
+    stale value (e.g. a v0.2.0 binary reporting 0.1.0). No-op when the value
+    already matches, so local builds leave the working tree untouched.
+    """
+    cleaned = version.lstrip("v") or version
+    path = ROOT / "src" / "core" / "version.py"
+    text = path.read_text(encoding="utf-8")
+    new, n = re.subn(
+        r'(?m)^(_FALLBACK_VERSION\s*=\s*")[^"]+(")',
+        rf"\g<1>{cleaned}\g<2>",
+        text,
+        count=1,
+    )
+    if n and new != text:
+        path.write_text(new, encoding="utf-8")
+        print(f"Pinned _FALLBACK_VERSION to {cleaned} in {path.name}")
 
 
 def _version_info(path: Path, version: str) -> None:
@@ -101,12 +125,20 @@ def _httpcloak_lib() -> tuple[Path, str] | None:
 
 
 def build(*, onefile: bool, version: str, versioned: bool) -> Path:
+    _embed_fallback_version(version)
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean",
         "--windowed",
         "--name", NAME,
         "--paths", str(ROOT),  # make `src` importable for analysis
+        # PySide6's Qt6 shared libraries (PySide6/Qt/lib, versioned sonames)
+        # and the shiboken binding loader are not reliably captured by the
+        # default hooks; without these the packaged app dies at import with
+        # "ImportError: DLL load failed while importing QtWidgets". This is
+        # the officially recommended PySide6 bundling.
+        "--collect-all", "PySide6",
+        "--collect-all", "shiboken6",
         str(ENTRY),
     ]
     if onefile:
