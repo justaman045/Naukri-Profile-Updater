@@ -49,7 +49,7 @@ triggers an automated build of all platforms — grab the latest from the
 
 ## Stack
 
-- **Python 3.10+** · **PySide6** (Qt6) for the desktop UI.
+- **Python 3.10+** · **PySide6-Essentials** (Qt6) for the desktop UI.
 - Vendored, trimmed copy of [NopeRi](https://github.com/Traverser25/NopeRi) for Naukri
   HTTP interaction (login, profile update, resume upload), plus custom additions:
   `fetch_profile` (rich `v2/users/self` read) and resume download

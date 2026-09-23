@@ -124,6 +124,16 @@ def _httpcloak_lib() -> tuple[Path, str] | None:
     return None
 
 
+def _pyside6_designer_dir() -> Path | None:
+    """Return the Qt Designer plugin dir inside the active PySide6 package."""
+    try:
+        import PySide6
+    except Exception:
+        return None
+    plugins = Path(PySide6.__file__).resolve().parent / "Qt" / "plugins" / "designer"
+    return plugins if plugins.is_dir() else None
+
+
 def build(*, onefile: bool, version: str, versioned: bool) -> Path:
     _embed_fallback_version(version)
     cmd = [
@@ -154,25 +164,47 @@ def build(*, onefile: bool, version: str, versioned: bool) -> Path:
         _version_info(version_info, version)
         cmd += ["--version-file", str(version_info)]
 
-        # Optional app icon (root-level app.ico / app.icns / app.png).
-        icon = _find_icon(system)
-        if icon:
-            cmd += ["--icon", str(icon)]
-            print(f"Using icon: {icon}")
-        else:
-            print("No app.ico/app.icns/app.png found; skipping --icon.")
+        # Qt Designer plugin exclusion. --collect-all PySide6 copies every
+        # binary under the PySide6 package, including
+        # Qt/plugins/designer/libqwebengineview.so. On machines with a system
+        # Qt install that plugin's ldd resolves WebEngine/WebChannel/QtPdf
+        # (plus the Chromium FFmpeg codec tree) from /usr/lib64, and PyInstaller
+        # drags ~200 MB of unused runtime libs into the app. Moving the dir OUT
+        # of the PySide6 package (into this tempdir, same filesystem) keeps it
+        # out of the collect; merely renaming it in place does not, since
+        # --collect-all scans the whole package recursively. Restored after.
+        designer = _pyside6_designer_dir()
+        parked: Path | None = None
+        if designer is not None:
+            parked = Path(tmp) / "designer.__DISABLED__"
+            designer.rename(parked)
+            print(f"Parked Qt Designer plugin out of the bundle: {designer.name}")
 
-        lib = _httpcloak_lib()
-        if lib:
-            src, dest = lib
-            sep = ";" if system == "Windows" else ":"
-            cmd += ["--add-binary", f"{src}{sep}{dest}"]
-            print(f"Bundling httpcloak binary: {src} -> {dest}")
-        else:
-            print("WARNING: could not find httpcloak native library to bundle.")
+        try:
+            # Optional app icon (root-level app.ico / app.icns / app.png).
+            icon = _find_icon(system)
+            if icon:
+                cmd += ["--icon", str(icon)]
+                print(f"Using icon: {icon}")
+            else:
+                print("No app.ico/app.icns/app.png found; skipping --icon.")
 
-        print("Running:", " ".join(cmd))
-        subprocess.run(cmd, check=True, cwd=ROOT)
+            lib = _httpcloak_lib()
+            if lib:
+                src, dest = lib
+                sep = ";" if system == "Windows" else ":"
+                cmd += ["--add-binary", f"{src}{sep}{dest}"]
+                print(f"Bundling httpcloak binary: {src} -> {dest}")
+            else:
+                print("WARNING: could not find httpcloak native library to bundle.")
+
+            print("Running:", " ".join(cmd))
+            subprocess.run(cmd, check=True, cwd=ROOT)
+        finally:
+            if parked is not None and parked.is_dir() and designer is not None \
+                    and not designer.exists():
+                parked.rename(designer)
+                print(f"Restored Qt Designer plugin: {designer.name}")
 
     dist = ROOT / "dist" / (NAME + (".exe" if system == "Windows" else ""))
     if onefile and versioned:

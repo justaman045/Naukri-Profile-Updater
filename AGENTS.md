@@ -208,6 +208,15 @@ Naukri profile, fully headless over HTTP.
   leading `v` is stripped, and `darwin`→`macos`). CI passes the computed next minor
   version (e.g. `--version 0.2.0`).
 - `--paths ROOT` and `--windowed` in `build.py` are required (GUI, headless).
+- **`--collect-all PySide6` drags in Qt's Designer plugin, which couples the build
+  to the system Qt.** It copies `PySide6/Qt/plugins/designer/libqwebengineview.so`, and
+  on machines with a system Qt install (e.g. `/usr/lib64/libQt6WebEngineCore.so.6`)
+  PyInstaller's `ldd` walk then bundles the ENTIRE WebEngine + Chromium FFmpeg codec
+  tree (libQt6WebEngineCore, libavcodec, libvpx, libaom, libx264/x265, ~200 MB the app
+  never uses). Verified: exe sized 307 MB with it, **157 MB** without. `build.py` parks
+  the designer plugin dir into its tempdir before running PyInstaller and restores it
+  after (renaming it in place is NOT enough — `--collect-all` scans the whole package).
+  Keep that exclusion or the Linux binary balloons on dev machines that have a system Qt.
 - `NaukriProfileManager.spec` at the repo root is a **generated** PyInstaller spec
   full of machine-local absolute paths (httpcloak lib under `.venv/...`, the
   `version_info.txt` temp path). `build.py` regenerates it on every build from its
@@ -228,6 +237,13 @@ Naukri profile, fully headless over HTTP.
   PySide6+PyInstaller bundling). Cost: artifact roughly doubles. Do not remove
   those flags and don't "optimize" to a targeted `--add-binary` for `Qt/lib`
   unless verified on all three OSes.
+- **Install `PySide6-Essentials`, NOT `PySide6`** (the full metapackage drags in
+  `pyside6-addons`: Qt3D, WebEngine, QML, Multimedia — ~2/3 of a onefile
+  binary). The import name is the same `PySide6` either way, and PyInstaller's Qt
+  detection is runtime introspection (`from PySide6.QtCore import QLibraryInfo`),
+  so the dist name does not matter. This split cut the release binaries ~2.5x
+  (306 MB → ~140 MB Linux) with no bundling changes. `requirements.txt` and
+  `pyproject.toml` both pin `PySide6-Essentials>=6.8`; keep them in sync.
 - **CI release pipeline** (`.github/workflows/build.yml`): a 4-job matrix builds
   `windows-latest` (x86_64), `ubuntu-latest` (x86_64), `macos-15-intel` (x86_64) and
   `macos-15` (arm64). **Every push to `master` auto-releases**: the `build` jobs
