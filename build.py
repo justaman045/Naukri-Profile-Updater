@@ -4,8 +4,8 @@
 Usage:
     python build.py                          # onedir (folder) — recommended
     python build.py --onefile                # single executable
-    python build.py --onefile --version v0.1.0         # versioned single file
-    python build.py --onefile --version v0.1.0 --versioned  # -> <name>-<ver>-<os>-<arch>
+    python build.py --onefile --version v0.2.0         # versioned single file
+    python build.py --onefile --version v0.2.0 --versioned  # -> <name>-<ver>-<os>-<arch>
 
 NOTE: PyInstaller does NOT cross-compile. Build on Windows (for .exe),
 macOS (for .app), and Linux separately, each on its own OS.

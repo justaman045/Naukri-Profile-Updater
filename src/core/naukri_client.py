@@ -1,4 +1,5 @@
 from typing import Optional
+import re
 
 from src.core.nope_ri.client.naukri_client import NaukriLoginClient
 from src.core.nope_ri.exceptions.exceptions import NaukriAuthError, NaukriParseError
@@ -17,13 +18,18 @@ _MONTHS = [
 ]
 
 
+def _file_safe(value: str) -> str:
+    """Collapse whitespace and drop characters that break a filename."""
+    return "_".join(re.sub(r"[^A-Za-z0-9 _-]", "", value).split())
+
+
 def _refresh_filename(profile: Profile) -> str:
     """Build `FullName_Position_Month_Day_Updated.pdf`."""
     from datetime import datetime
 
     now = datetime.now()
-    name = " ".join(profile.name.split()).replace(" ", "_") if profile.name else "Profile"
-    position = " ".join(profile.position.split()).replace(" ", "_") if profile.position else "Position"
+    name = _file_safe(profile.name) if profile.name else "Profile"
+    position = _file_safe(profile.position) if profile.position else "Position"
     month = _MONTHS[now.month - 1]
     day = now.day
     return f"{name}_{position}_{month}_{day}_Updated.pdf"

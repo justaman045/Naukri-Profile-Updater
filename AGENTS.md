@@ -20,6 +20,9 @@ Naukri profile, fully headless over HTTP.
 - `src/main.py` also refuses to run outside a virtualenv (exits with a message to
   stderr). The guard exempts `sys.frozen` builds so the packaged app still runs —
   do not remove the frozen exemption, or the distributed executable breaks.
+- `main()` is a `while True` loop so **logout returns to the LoginDialog instead of
+  exiting the app** (closing the window ends the loop; `window.relogin_requested`
+  drives a re-login). Don't "simplify" the loop away.
 - Naukri interaction lives in `src/core/nope_ri/` — a **vendored** copy of
   [NopeRi](https://github.com/Traverser25/NopeRi), edited so its absolute
   `from src...` imports became **relative** (`from .session import ...`, etc.).
@@ -33,12 +36,20 @@ Naukri profile, fully headless over HTTP.
   summary, skills (`keySkills`), resume metadata (`cvInfo`, incl. `fileName`,
   `cvFormat`, `uploadDate`), name, `role.value`, city, `experience{month,year}`,
   CTC, notice period, etc., all under `profile[0]`. Do not revert to dashboard-only.
+  **Position is NOT `role`.** It is parsed from the root-level `employments[]`
+  list — the entry with `employmentType == "current"` (or `endDate` null), else
+  the latest by `startDate`, reading its `designation` field. The profile-level
+  `role.value` is a stale generic default ("Software Developer") and is only used
+  for legacy payloads that carry no `employments` key.
 - Resume **download**: `GET /v1/users/self/profiles/{profile_id}/resume` with
   `content-type: application/pdf` (Accept must stay `application/json` — setting
   `Accept: application/pdf` returns **406**). `NaukriManager.refresh_resume()`
   downloads the on-file PDF, renames it to `Name_Position_Month_Day_Updated.pdf`
-  (e.g. `Aman_Ojha_Software_Developer_September_1_Updated.pdf`) and re-uploads it.
-  The renaming helper `_refresh_filename()` lives in `src/core/naukri_client.py`.
+  (e.g. `Aman_Ojha_Systems_Engineer_Senior_SDET_September_1_Updated.pdf`) and
+  re-uploads it. The `Position` segment comes from `profile.position` (the current
+  employment designation) and is sanitized by `_file_safe()` (letters/digits/
+  underscore only — parentheses and commas are stripped). The renaming helper
+  `_refresh_filename()` lives in `src/core/naukri_client.py`.
 - **Resume upload's formKey is the `attachCV` key from the `mnj_v<NNN>` bundle, scraped
   live — never hardcoded.** There are TWO uploader keys on a page and they are different:
   the app-shell chat uploader declares `this.formKey="<key>"` in `app_v<NNN>.min.js`, while
@@ -190,8 +201,13 @@ Naukri profile, fully headless over HTTP.
 - PyInstaller does **not** cross-compile: build each OS on that OS.
 - `build.py` supports `--onefile`, `--onedir`, and `--versioned` (renames the artifact to
   `NaukriProfileManager-<ver>-<os>-<arch>[.exe]` using `--version` or `app_version()`; the
-  leading `v` is stripped, and `darwin`→`macos`). CI passes `--version "${{ github.ref_name }}"`.
+  leading `v` is stripped, and `darwin`→`macos`). CI passes the computed next minor
+  version (e.g. `--version 0.2.0`).
 - `--paths ROOT` and `--windowed` in `build.py` are required (GUI, headless).
+- `NaukriProfileManager.spec` at the repo root is a **generated** PyInstaller spec
+  full of machine-local absolute paths (httpcloak lib under `.venv/...`, the
+  `version_info.txt` temp path). `build.py` regenerates it on every build from its
+  CLI flags — do not hand-edit it, change `build.py` instead.
 - **httpcloak's native `.so`/`.dll`/`.dylib` is NOT auto-collected by PyInstaller.**
   `build.py` locates and `--add-binary`s it into `httpcloak/lib/` (matching httpcloak's
   runtime search path). If you see "Could not find httpcloak library" in the packaged
@@ -200,26 +216,33 @@ Naukri profile, fully headless over HTTP.
   nests the file inside a subdirectory of its own name and loading fails.
 - **CI release pipeline** (`.github/workflows/build.yml`): a 4-job matrix builds
   `windows-latest` (x86_64), `ubuntu-latest` (x86_64), `macos-15-intel` (x86_64) and
-  `macos-15` (arm64). Every push to `master` uploads short-lived artifacts only; every
-  `v*` tag push additionally runs a tag-gated `release` job (after all builds succeed)
-  that downloads all four and publishes a GitHub **Release** with permanent assets via
-  `gh release create ... --notes-file`. macOS-13 x64 is retired — use `macos-15-intel`
-  for Intel and `macos-15` for Apple Silicon.
+  `macos-15` (arm64). **Every push to `master` auto-releases**: the `build` jobs
+  compute the next minor version from `pyproject.toml` (`0.1.0` → `0.2.0`, same
+  computation on all runners → identical asset names), then the `release` job bumps
+  `pyproject.toml` + `src/core/version.py._FALLBACK_VERSION`, rewrites the README
+  Download table/URLs to the new version, commits that as
+  `chore(release): v<NEXT> [skip ci]` (the `[skip ci]` is what stops the workflow
+  re-triggering on its own commit), pushes tag `v<NEXT>`, and publishes a GitHub
+  Release with the four artifacts via `gh release create ... --notes-file`.
+  `workflow_dispatch` builds artifacts only unless its `release` input is set.
+  macOS-13 x64 is retired — use `macos-15-intel` for Intel and `macos-15` for
+  Apple Silicon.
 - Unsigned macOS builds show a Gatekeeper prompt (documented in README).
 
 ### CI/build pitfalls (learned the hard way)
 
-- **`build.py --version "${{ github.ref_name }}"` is dangerous on branch pushes.**
-  `github.ref_name` is `master` (branch) or `v0.1.0` (tag). `_version_info()` must
-  produce a **strictly-numeric 4-part** `filevers`/`prodvers`: PyInstaller `eval`s the
-  VERSIONINFO file as Python, so any non-numeric segment crashes with
+- **CI passes an explicit numeric version to `build.py` now** (computed from
+  `pyproject.toml`, e.g. `--version 0.2.0`) — but keep `_version_info()`'s sanitizer.
+  VERSIONINFO requires a **strictly-numeric 4-part** `filevers`/`prodvers`: PyInstaller
+  `eval`s the VERSIONINFO file as Python, so any non-numeric segment crashes with
   `NameError: name '<x>' is not defined` (saw `v0` from `v0.1.0` before lstrip, and
-  `master` from a branch push). Keep the sanitizer that keeps only `.isdigit()` parts
-  padded to 4 (`build.py:_version_info`). Note this only bites Windows — Linux/macOS
-  don't deserialize VERSIONINFO.
-- **A green tag build does NOT mean a green branch build.** The tag run and the master
-  push run can finish differently (e.g. tag succeeded, branch failed on a flaky upload)
-  even for the same commit, because they're separate runs. Check the specific run, not
+  `master` from a branch push). Keep the filter that keeps only `.isdigit()` parts
+  padded to 4. Note this only bites Windows — Linux/macOS don't deserialize
+  VERSIONINFO.
+- **Neither the bot's `[skip ci]` bump commit nor the `v<NEXT>` tag push re-triggers
+  the workflow** — `on:` watches only `master` pushes (plus `workflow_dispatch`, which
+  releases only if its `release` input is set). If a build job fails, only that one run
+  turns red; the release job of a prior run is unaffected. Check the specific run, not
   a sibling.
 - **`actions/upload-artifact@v4` has a transient `FinalizeArtifact 403` bug**:
   `##[error]Failed to FinalizeArtifact: ... (403) Forbidden: Error from intermediary`.

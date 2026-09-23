@@ -72,6 +72,16 @@ class Profile:
         if not isinstance(cv, dict):
             cv = {}
 
+        # `position` comes from the root `employments[]` list (the entry flagged
+        # `employmentType == "current"`, else the most recent by `startDate`).
+        # The profile-level `role` field is a stale/generic default (often
+        # "Software Developer") that does not reflect the real job history, so it
+        # is only used for legacy payloads that carry no `employments` key at all.
+        if "employments" in data:
+            position = _employment_designation(data.get("employments"))
+        else:
+            position = _nested_value(profile, "role") or ""
+
         return cls(
             name=profile.get("name", "") or "",
             headline=profile.get("resumeHeadline", "") or "",
@@ -80,7 +90,7 @@ class Profile:
             phone=str(phone),
             profile_id=profile.get("profileId", "") or profile_id,
             skills=profile.get("keySkills", "") or "",
-            position=_nested_value(profile, "role") or "",
+            position=position,
             city=_nested_value(profile, "city") or "",
             experience_years=str(exp_years),
             experience_months=str(exp_months),
@@ -94,6 +104,32 @@ class Profile:
             resume_available=bool(cv.get("isAvailable")),
             raw=profile,
         )
+
+
+def _employment_designation(employments) -> str:
+    """Return the designation of the current (active) employment.
+
+    Prefers an entry flagged ``employmentType == "current"`` (or with no
+    ``endDate``), otherwise the most recent by ``startDate``. Returns "" when
+    there is no usable entry. Never uses the profile-level ``role`` field, which
+    can be a stale generic default (e.g. "Software Developer").
+    """
+    if not isinstance(employments, list) or not employments:
+        return ""
+    candidates = [
+        e for e in employments
+        if isinstance(e, dict) and isinstance(e.get("designation"), str)
+        and e["designation"].strip()
+    ]
+    if not candidates:
+        return ""
+    current = [
+        e for e in candidates
+        if e.get("employmentType") == "current" or e.get("endDate") is None
+    ]
+    pool = current or candidates
+    pool.sort(key=lambda e: str(e.get("startDate") or ""), reverse=True)
+    return str(pool[0]["designation"]).strip()
 
 
 def _nested_value(profile: dict, key: str) -> str:

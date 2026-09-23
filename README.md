@@ -95,10 +95,11 @@ python build.py --onefile
 
 `.github/workflows/build.yml` builds Windows, Linux, and both macOS architectures:
 
-- **Every push to `master`** → builds all four and uploads them as (short-lived) artifacts.
-- **Every `vX.Y.Z` tag push** → builds all four and publishes a **GitHub Release** with
-  permanent, user-downloadable executables (what the Download table links to).
-- Manual trigger via the **"Build executables"** workflow's *Run workflow* button.
+- **Every push to `master`** → builds all four platforms, bumps the minor version
+  (`0.1.0` → `0.2.0`), rewrites this Download table and the About-tab version,
+  tags `vX.Y.Z`, and publishes a **GitHub Release** with permanent assets.
+- Manual trigger via the **"Build executables"** workflow's *Run workflow* button
+  builds artifacts only, unless its `release` input is enabled.
 
 ## ⚠️ Important Naukri constraints
 

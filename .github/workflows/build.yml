@@ -4,9 +4,12 @@ on:
   push:
     branches:
       - master
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish a GitHub Release (also bumps the minor version)
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -41,8 +44,18 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pyinstaller
 
+      # Minor bump of the version in pyproject.toml (0.1.0 -> 0.2.0). All four
+      # runners check out the same HEAD, so they compute the same version and the
+      # artifact names line up for the release job.
+      - name: Compute next version
+        id: ver
+        shell: bash
+        run: |
+          NEXT=$(python -c 'import tomllib; d=tomllib.load(open("pyproject.toml","rb")); a,b,c=(int(x) for x in d["project"]["version"].split(".")); print(f"{a}.{b+1}.0")')
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+
       - name: Build single-file executable
-        run: python build.py --onefile --versioned --version "${{ github.ref_name }}"
+        run: python build.py --onefile --versioned --version "${{ steps.ver.outputs.next }}"
 
       - name: Upload executable
         uses: actions/upload-artifact@v4.6.2
@@ -52,23 +65,85 @@ jobs:
           if-no-files-found: error
 
   release:
+    # Publish on every master push; workflow_dispatch only when its `release`
+    # input is enabled. The bot's own bump commit carries "[skip ci]" so this
+    # workflow does NOT re-trigger on the commit it writes back.
+    if: github.event_name == 'push' || inputs.release == true
     needs: build
-    # Only publish a GitHub Release when the run was triggered by a version tag.
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
+      - name: Compute next version
+        id: ver
+        shell: bash
+        run: |
+          NEXT=$(python -c 'import tomllib; d=tomllib.load(open("pyproject.toml","rb")); a,b,c=(int(x) for x in d["project"]["version"].split(".")); print(f"{a}.{b+1}.0")')
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+
+      # Duplicate-run guard: rapid sequential pushes can compute the same next
+      # version; if a coincidentally-tagged release already exists, stop quietly.
+      - name: Check release already exists
+        id: check
+        shell: bash
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${{ steps.ver.outputs.next }}" >/dev/null 2>&1; then
+            echo "Tag v${{ steps.ver.outputs.next }} already exists — skipping release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump version and rewrite README download links
+        if: steps.check.outputs.skip == 'false'
+        env:
+          NEXT: ${{ steps.ver.outputs.next }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+          v = os.environ["NEXT"]
+          for path, pattern in (
+              ("pyproject.toml", r'(?m)^(version\s*=\s*")[^"]+(")'),
+              ("src/core/version.py", r'(?m)^(_FALLBACK_VERSION\s*=\s*")[^"]+(")'),
+          ):
+              p = pathlib.Path(path)
+              p.write_text(re.sub(pattern, rf"\g<1>{v}\g<2>", p.read_text()))
+          p = pathlib.Path("README.md")
+          t = re.sub(r"v\d+\.\d+\.\d+", f"v{v}", p.read_text())
+          t = re.sub(r"-\d+\.\d+\.\d+-", f"-{v}-", t)
+          p.write_text(t)
+          print(f"bumped sources and README to {v}")
+          PY
+          git diff --stat
+
+      - name: Commit bump, push tag
+        if: steps.check.outputs.skip == 'false'
+        env:
+          NEXT: ${{ steps.ver.outputs.next }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml src/core/version.py README.md
+          git commit -m "chore(release): v$NEXT [skip ci]"
+          git tag "v$NEXT"
+          # "[skip ci]" in the commit above stops this workflow from re-triggering
+          # on the push, so each human push yields exactly one release.
+          git push origin HEAD:master "v$NEXT"
+
       - name: Download all executables
+        if: steps.check.outputs.skip == 'false'
         uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: false
 
       - name: Flatten assets and write release notes
-        id: assets
+        if: steps.check.outputs.skip == 'false'
+        env:
+          NEXT: ${{ steps.ver.outputs.next }}
         shell: bash
         run: |
           mkdir -p assets
@@ -76,22 +151,29 @@ jobs:
             cp "$f" assets/
           done
           ls -1 assets
-          cat > NOTES.md <<'EOF'
-          Automated build of Naukri Profile Manager ${{ github.ref_name }}.
-
-          - Windows x86_64: `.exe`
-          - Linux x86_64
-          - macOS x86_64 (Intel)
-          - macOS arm64 (Apple Silicon)
-
-          Unsigned build — Windows SmartScreen and macOS Gatekeeper may warn; see README.
-          EOF
+          prev=$(git ls-remote --tags origin | sed -n 's#.*refs/tags/\(v[0-9.]*\)$#\1#p' | grep -v "^v$NEXT$" | sort -V | tail -1 || true)
+          {
+            echo "Automated build of Naukri Profile Manager v$NEXT."
+            echo
+            if [ -n "$prev" ]; then
+              echo "Changes since $prev: https://github.com/${{ github.repository }}/compare/$prev...v$NEXT"
+            fi
+            echo
+            echo "- Windows x86_64: \`.exe\`"
+            echo "- Linux x86_64"
+            echo "- macOS x86_64 (Intel)"
+            echo "- macOS arm64 (Apple Silicon)"
+            echo
+            echo "Unsigned build — Windows SmartScreen and macOS Gatekeeper may warn; see README."
+          } > NOTES.md
 
       - name: Create GitHub Release
-        run: |
-          gh release create "${{ github.ref_name }}" assets/* \
-            --repo "${{ github.repository }}" \
-            --title "Naukri Profile Manager ${{ github.ref_name }}" \
-            --notes-file NOTES.md
+        if: steps.check.outputs.skip == 'false'
         env:
+          NEXT: ${{ steps.ver.outputs.next }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v$NEXT" assets/* \
+            --repo "${{ github.repository }}" \
+            --title "Naukri Profile Manager v$NEXT" \
+            --notes-file NOTES.md
