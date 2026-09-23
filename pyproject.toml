@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "naukri-profile-update"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cross-platform desktop app to view and update your Naukri profile (headless HTTP, no browser)"
 readme = "README.md"
 requires-python = ">=3.10"

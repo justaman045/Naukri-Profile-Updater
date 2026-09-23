@@ -12,12 +12,12 @@ triggers an automated build of all platforms — grab the latest from the
 
 | Platform            | Architecture    | File asset / download                                            |
 |---------------------|-----------------|------------------------------------------------------------------|
-| Windows             | x86_64          | [NaukriProfileManager-0.1.0-windows-x86_64.exe](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.1.0/NaukriProfileManager-0.1.0-windows-x86_64.exe) |
-| Linux               | x86_64          | [NaukriProfileManager-0.1.0-linux-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.1.0/NaukriProfileManager-0.1.0-linux-x86_64) |
-| macOS (Intel)       | x86_64          | [NaukriProfileManager-0.1.0-macos-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.1.0/NaukriProfileManager-0.1.0-macos-x86_64) |
-| macOS (Apple Silicon) | arm64         | [NaukriProfileManager-0.1.0-macos-arm64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.1.0/NaukriProfileManager-0.1.0-macos-arm64) |
+| Windows             | x86_64          | [NaukriProfileManager-0.2.0-windows-x86_64.exe](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-windows-x86_64.exe) |
+| Linux               | x86_64          | [NaukriProfileManager-0.2.0-linux-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-linux-x86_64) |
+| macOS (Intel)       | x86_64          | [NaukriProfileManager-0.2.0-macos-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-macos-x86_64) |
+| macOS (Apple Silicon) | arm64         | [NaukriProfileManager-0.2.0-macos-arm64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.2.0/NaukriProfileManager-0.2.0-macos-arm64) |
 
-> The links above point at the current `v0.1.0` release. After each new tag, the
+> The links above point at the current `v0.2.0` release. After each new tag, the
 > [Releases page](https://github.com/justaman045/Naukri-Profile-Updater/releases/latest)
 > always carries the newest per-OS executables.
 >
@@ -71,8 +71,8 @@ On first run, enter your Naukri email + password. Your session is saved to
 pip install pyinstaller
 python build.py                          # onedir (folder) — recommended locally
 python build.py --onefile                # single executable (slower startup)
-python build.py --onefile --versioned --version v0.1.0
-                                         # -> NaukriProfileManager-0.1.0-<os>-<arch>
+python build.py --onefile --versioned --version v0.2.0
+                                         # -> NaukriProfileManager-0.2.0-<os>-<arch>
 ```
 
 **PyInstaller does not cross-compile.** Build Linux on Linux, Windows on Windows, and macOS

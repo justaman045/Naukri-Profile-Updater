@@ -21,7 +21,7 @@ CREDITS = (
     "built with PySide6, httpcloak, requests and pypdf."
 )
 
-_FALLBACK_VERSION = "0.1.0"
+_FALLBACK_VERSION = "0.2.0"
 _PROJECT_VERSION_RE = re.compile(r"^\s*version\s*=\s*[\"']([^\"']+)[\"']", re.MULTILINE)
 
 
