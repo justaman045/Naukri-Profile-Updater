@@ -1,10 +1,25 @@
-from PySide6.QtCore import Signal
+import logging
+import time
+from functools import partial
+
+from PySide6.QtCore import QTimer, Signal, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QLabel, QMessageBox
 
 from src.core.credentials import credential_for_relogin
 from src.core.naukri_client import NaukriManager
 from src.core.nope_ri.exceptions.exceptions import NaukriAuthError
-from src.core.settings import load_settings
+from src.core.settings import load_settings, save_settings
+from src.core.update_check import (
+    AUTO_CHECK_TIMEOUT,
+    MANUAL_CHECK_TIMEOUT,
+    RELEASES_PAGE,
+    UpdateCheckError,
+    UpdateInfo,
+    check_for_update,
+    should_check,
+)
+from src.core.version import app_version
 from src.core.worker import ApiWorker
 from src.ui.profile_tab import ProfileTab
 from src.ui.edit_tab import EditTab
@@ -12,6 +27,8 @@ from src.ui.refresh_tab import RefreshTab
 from src.ui.settings_tab import SettingsTab
 from src.ui.developer_tab import DeveloperTab
 from src.ui.about_tab import AboutTab
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -28,6 +45,7 @@ class MainWindow(QMainWindow):
         self.resize(760, 600)
         self._fetch_worker: ApiWorker | None = None
         self._relogin_worker: ApiWorker | None = None
+        self._update_worker: ApiWorker | None = None
         self._relogin_attempted = False
         self._relogin_refetch = False
         self._last_profile = None
@@ -61,7 +79,11 @@ class MainWindow(QMainWindow):
         # profile load — offers the silent re-login.
         self.manager.set_auth_failure_hook(self._auth_failure.emit)
         self._auth_failure.connect(self._on_auth_failure)
+        self.about_tab.check_requested.connect(self._on_manual_update_check)
         self.refresh_profile()
+        # Deferred so it cannot start until the event loop is running, which
+        # means the window is painted before any notification can appear.
+        QTimer.singleShot(0, self._maybe_check_updates)
 
     def _build_menu(self) -> None:
         menu = self.menuBar().addMenu("&File")
@@ -211,6 +233,96 @@ class MainWindow(QMainWindow):
         # manager with no session behind.
         self.relogin_requested = True
         self.close()
+
+    # --- Update notifications -------------------------------------------------
+    #
+    # Everything here is best-effort and must never interrupt the user: a failed
+    # check logs at debug and updates a status line, it does not raise a dialog.
+    # `check_for_update` uses plain `requests` (never the httpcloak session) and
+    # is not wrapped in `with_exponential_retry`, so a GitHub outage cannot make
+    # `ApiWorker.shutdown()` fall back to `terminate()` on quit.
+
+    def _maybe_check_updates(self) -> None:
+        if should_check(self.settings):
+            self._start_update_check(AUTO_CHECK_TIMEOUT)
+
+    def _on_manual_update_check(self) -> None:
+        # The user is waiting deliberately, so ignore the 24h throttle (but not
+        # the opt-out setting).
+        if not self.settings.check_for_updates:
+            self.about_tab.set_update_status("Update checks are turned off.")
+            return
+        self._start_update_check(MANUAL_CHECK_TIMEOUT, manual=True)
+
+    def _start_update_check(self, timeout: int, *, manual: bool = False) -> None:
+        if self._update_worker is not None and self._update_worker.isRunning():
+            return
+        # Record the attempt either way. A failure must not turn into a request
+        # on every single launch.
+        self.settings.last_update_check = time.time()
+        save_settings(self.settings)
+        self.about_tab.set_check_enabled(False)
+        self._update_worker = ApiWorker(
+            partial(check_for_update, app_version(), timeout)
+        )
+        self._update_worker.succeeded.connect(self._on_update_checked)
+        self._update_worker.failed.connect(self._on_update_check_failed)
+        self._update_worker.start()
+        if manual:
+            self.about_tab.set_update_status("Checking for updates...")
+
+    def _on_update_checked(self, info: UpdateInfo | None) -> None:
+        self.about_tab.set_check_enabled(True)
+        if info is None:
+            self.about_tab.set_update_status(f"Up to date (v{app_version()}).")
+            return
+
+        self.about_tab.set_update_status(f"Update available: v{info.version}")
+        self.statusBar().showMessage(
+            f"Version {info.version} is available (running {app_version()})."
+        )
+        if info.version == self.settings.dismissed_version:
+            # The user already said "remind me later" about this exact version.
+            # Stay quiet so we never nag more than once per release; a newer
+            # version prompts afresh.
+            logger.debug("update %s already dismissed, not prompting", info.version)
+            return
+        if self.relogin_requested:
+            # The window is already tearing down for a re-login; a second modal
+            # would stack on top of the session-expired one.
+            logger.debug("update %s available, but skipping dialog", info.version)
+            return
+        self._prompt_update(info)
+
+    def _on_update_check_failed(self, exc: Exception) -> None:
+        self.about_tab.set_check_enabled(True)
+        if isinstance(exc, UpdateCheckError):
+            # Expected: offline, rate-limited, renamed repo. Silent by design.
+            logger.debug("update check failed: %s", exc)
+        else:
+            # Not an expected failure, so this is a bug worth seeing in the log --
+            # still no dialog, but it must not hide at debug level.
+            logger.warning("unexpected update-check failure: %r", exc)
+        self.about_tab.set_update_status("Update check unavailable.")
+
+    def _prompt_update(self, info: UpdateInfo) -> None:
+        body = f"Version {info.version} is available (you have {app_version()})."
+        if info.notes:
+            body += f"\n\n{info.notes}"
+        body += f"\n\n{RELEASES_PAGE}"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("Update Available")
+        box.setText("A newer version of Naukri Profile Manager is available.")
+        box.setInformativeText(body)
+        open_btn = box.addButton("Open releases page", QMessageBox.AcceptRole)
+        box.addButton("Remind me later", QMessageBox.RejectRole)
+        box.setDefaultButton(open_btn)
+        box.exec()
+        # Whatever the answer, don't nag again about THIS version. A newer one
+        # will prompt afresh.
+        self.settings.dismissed_version = info.version
+        save_settings(self.settings)
 
     def closeEvent(self, event):
         # Give in-flight requests a moment to settle. The real guarantee that no

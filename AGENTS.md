@@ -106,10 +106,39 @@ Naukri profile, fully headless over HTTP (no browser, Selenium or Playwright).
   `result.status_code` and the body's error envelope; it used to print "Saved successfully."
   unconditionally, hiding real rejections (an over-length summary answers 400).
 - App identity/version lives in `src/core/version.py` (`APP_NAME`, `DEVELOPER`, `LICENSE`,
-  `CREDITS`, `app_version()`). `app_version()` reads `[project] version` from `pyproject.toml`
+  `CREDITS`, `app_version()`).   `app_version()` reads `[project] version` from `pyproject.toml`
   in a source checkout and falls back to `_FALLBACK_VERSION` when frozen (pyproject.toml isn't
   bundled). Keep the two in sync; the release CI job bumps both.
+- **Update notifications** live in `src/core/update_check.py` and notify only — they open the
+  releases page in the browser; nothing is downloaded or installed. `MainWindow` owns the worker,
+  the dialog and `AppSettings`; `AboutTab` holds no network logic, only `check_requested` +
+  `set_update_status()`. Four rules, all of them load-bearing:
+  - **Plain `requests`, never the httpcloak session** — same reason as `_fetch_js()`: that session
+    is IP-bound, fingerprinted by Naukri, and has no business touching an unauthenticated public
+    API. It must also **not** go behind `NaukriManager._guard_auth`, or a GitHub 403 rate-limit
+    would look like a dead Naukri session and trigger the re-login flow.
+  - **No `with_exponential_retry`, and a short timeout** (5s automatic, 15s manual). The retry
+    helper sleeps up to 60s between attempts, which would guarantee `ApiWorker.shutdown()` falls
+    back to `terminate()` on quit. A failed update check is not worth retrying.
+  - **Failures are silent** — `logger.debug` and an "unavailable" status line, never a modal. An
+    update check must never nag about itself, and the attempt is timestamped either way so
+    failures can't cause a request on every launch.
+  - **One nag per version.** `should_check` handles only the gates knowable without the network
+    (enabled / 24h throttle / not a source checkout); the "remind me later" gate needs the latest
+    version, so `MainWindow._on_update_checked` compares it against
+    `AppSettings.dismissed_version`. A newer version prompts again.
+  Source is `GET /repos/justaman045/Naukri-Profile-Updater/releases/latest`, which the CI always
+  publishes as a non-draft, non-prerelease via `gh release create`. Keep the explicit
+  `User-Agent`: GitHub's REST docs require one and used to reject the request without it (verified
+  2026-09 that the endpoint now answers 200 even with all headers cleared, and `requests` sends a
+  `python-requests/<x>` default anyway) — so it identifies the app rather than fixing a 403 we can
+  reproduce. Versions are strict `X.Y.Z` (the workflow computes them with `int()`), so
+  `parse_version` does a 3-tuple compare and returns `None` for anything else — no `packaging`
+  dependency, hence no `requirements.txt`/`build.py` churn. The About status line must stay
+  **short**: it sits in a `QFormLayout` with horizontal `Preferred` policy, so a release URL in it
+  would widen the window. Full URLs/notes go in the dialog only.
 - Profile parsing: `Profile.from_raw` (`src/models/profile.py`) tolerates the rich
+
   `{user, profile: [...]}` shape, a bare dict, `{dashBoard: ...}`, and a single-element list
   (the `fullprofiles` response).
 

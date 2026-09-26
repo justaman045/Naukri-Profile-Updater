@@ -61,6 +61,19 @@ PROVIDER_LABELS = {
 }
 
 
+def _as_float(value, default: float = 0.0) -> float:
+    """Coerce a config value to float, falling back on anything unusable.
+
+    `load_settings` only catches JSON/OSError, so a hand-edited or corrupted
+    `config.json` must not be able to raise out of the dataclass constructor and
+    brick startup.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class AppSettings:
     show_developer: bool = False
@@ -68,6 +81,10 @@ class AppSettings:
     ai_base_url: str = ""
     ai_model: str = ""
     ai_api_key: str = ""
+    # Update notifications (see src/core/update_check.py).
+    check_for_updates: bool = True
+    last_update_check: float = 0.0
+    dismissed_version: str = ""
 
     @property
     def effective_base_url(self) -> str:
@@ -95,6 +112,9 @@ class AppSettings:
             ai_base_url=data.get("ai_base_url", ""),
             ai_model=data.get("ai_model", ""),
             ai_api_key=data.get("ai_api_key", ""),
+            check_for_updates=bool(data.get("check_for_updates", True)),
+            last_update_check=_as_float(data.get("last_update_check"), 0.0),
+            dismissed_version=data.get("dismissed_version", ""),
         )
 
 

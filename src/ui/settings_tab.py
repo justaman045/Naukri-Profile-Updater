@@ -28,6 +28,23 @@ class SettingsTab(QWidget):
         self.settings = settings
         self._model_worker: ApiWorker | None = None
 
+        # --- Updates ---
+        update_group = QGroupBox("Updates")
+        self.update_check = QCheckBox(
+            "Check GitHub for a newer version on startup (at most once a day)"
+        )
+        self.update_check.setChecked(self.settings.check_for_updates)
+        self.update_check.toggled.connect(self._on_update_toggled)
+        update_hint = make_wrapping_status_label(
+            "Only a single unauthenticated request to the public GitHub Releases "
+            "API is made. Your profile data is never sent anywhere. Update checks "
+            "are skipped when running from a source checkout, and any failure is "
+            "silent."
+        )
+        update_layout = QVBoxLayout(update_group)
+        update_layout.addWidget(self.update_check)
+        update_layout.addWidget(update_hint)
+
         # --- Developer options ---
         dev_group = QGroupBox("Developer options")
         self.dev_check = QCheckBox("Enable Developer options (hidden/experimental tools)")
@@ -111,6 +128,7 @@ class SettingsTab(QWidget):
         btn_row.addWidget(self.save_btn)
 
         layout = QVBoxLayout(self)
+        layout.addWidget(update_group)
         layout.addWidget(dev_group)
         layout.addWidget(cred_group)
         layout.addWidget(ai_group)
@@ -222,6 +240,20 @@ class SettingsTab(QWidget):
     #
     def _on_dev_toggled(self, checked: bool) -> None:
         self.settings.show_developer = checked
+
+    def _on_update_toggled(self, checked: bool) -> None:
+        self.settings.check_for_updates = checked
+        # Re-arm the throttle so enabling the setting takes effect on the next
+        # launch instead of waiting out the old interval.
+        self.settings.last_update_check = 0.0
+        try:
+            save_settings(self.settings)
+        except OSError as exc:
+            self.status_lbl.setText(f"Could not save settings: {exc}")
+            return
+        self.status_lbl.setText(
+            "Update checks enabled." if checked else "Update checks disabled."
+        )
 
     def _save(self) -> None:
         self.settings.ai_provider = self.provider_combo.currentData()
