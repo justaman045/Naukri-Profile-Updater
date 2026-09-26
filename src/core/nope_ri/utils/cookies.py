@@ -35,6 +35,15 @@ def set_cookies(session, cookies: dict) -> None:
     session handle; it is the only path that survives. The `.cookies`
     attribute is a copy-on-read view, so appending to it is a silent no-op.
     For the requests CookieJar backend we call `.update()`.
+
+    Known limitation: `session.json` persists only a flat {name: value} map,
+    so the original per-cookie domain/path are not recoverable here and every
+    cookie is restored with the Naukri-wide scope below. That is correct for
+    every cookie this app stores (they all come from *.naukri.com over HTTPS),
+    but a cookie scoped to a narrower path would come back too broad. Fixing it
+    properly means persisting domain/path per cookie, i.e. a session.json
+    schema change with backward compatibility -- deliberately not done here
+    because nothing currently depends on the narrower scope.
     """
     setter = getattr(session, "set_cookie", None)
     if setter is not None:

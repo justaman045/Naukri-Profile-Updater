@@ -6,13 +6,17 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from src.core.ai_client import AiClient, _provider_requires_key
+from src.core.credentials import delete_credential, list_credentials
 from src.core.settings import AppSettings, DEFAULT_BASE_URLS, PROVIDER_LABELS, save_settings
 from src.core.worker import ApiWorker
 from src.ui._label_utils import make_wrapping_status_label
@@ -31,6 +35,28 @@ class SettingsTab(QWidget):
         self.dev_check.toggled.connect(self._on_dev_toggled)
         dev_layout = QVBoxLayout(dev_group)
         dev_layout.addWidget(self.dev_check)
+
+        # --- Saved accounts ---
+        cred_group = QGroupBox("Saved accounts")
+        cred_hint = QLabel(
+            "Accounts saved from the login screen. They fill the login form and, "
+            "when a password is stored, let the app sign back in automatically if "
+            "your session expires. Passwords are stored in plain text in "
+            "credentials.json next to the saved session — use 'email only' unless "
+            "you want the automatic re-login."
+        )
+        cred_hint.setWordWrap(True)
+        self.accounts_list = QListWidget()
+        self.accounts_list.setMaximumHeight(96)
+        self.forget_btn = QPushButton("Forget this account")
+        self.forget_btn.clicked.connect(self._forget_account)
+        cred_btns = QHBoxLayout()
+        cred_btns.addWidget(self.accounts_list, 1)
+        cred_btns.addWidget(self.forget_btn)
+        cred_layout = QVBoxLayout(cred_group)
+        cred_layout.addWidget(cred_hint)
+        cred_layout.addLayout(cred_btns)
+        self._load_accounts()
 
         # --- AI provider ---
         ai_group = QGroupBox("AI optimizer")
@@ -86,12 +112,46 @@ class SettingsTab(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(dev_group)
+        layout.addWidget(cred_group)
         layout.addWidget(ai_group)
         layout.addWidget(self.status_lbl)
         layout.addStretch(1)
         layout.addLayout(btn_row)
 
         self._update_load_button_state()
+
+    #
+    # Saved accounts
+    #
+    def _load_accounts(self) -> None:
+        self.accounts_list.clear()
+        creds = list_credentials()
+        for cred in creds:
+            hint = "password saved" if cred.password else "email only"
+            item = QListWidgetItem(f"{cred.email}  ({hint})")
+            # Keep the raw email out of the display text so lookup is exact.
+            item.setData(Qt.ItemDataRole.UserRole, cred.email)
+            self.accounts_list.addItem(item)
+        if creds:
+            self.accounts_list.setCurrentRow(0)
+        self.forget_btn.setEnabled(bool(creds))
+
+    def _forget_account(self) -> None:
+        item = self.accounts_list.currentItem()
+        if not item:
+            return
+        email = item.data(Qt.ItemDataRole.UserRole) or ""
+        if not email:
+            return
+        try:
+            removed = delete_credential(email)
+        except OSError as exc:
+            self.status_lbl.setText(f"Could not remove saved account: {exc}")
+            return
+        self._load_accounts()
+        self.status_lbl.setText(
+            f"Removed saved account {email}." if removed else "Nothing to remove."
+        )
 
     #
     # UI helpers

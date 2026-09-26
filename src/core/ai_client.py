@@ -102,10 +102,14 @@ class AiClient:
     provider's ``GET {base_url}/models`` endpoint.
     """
 
+    # Class-level so it survives the UI creating a fresh AiClient per model
+    # load (an instance attribute could never hit). Keyed by provider, base URL
+    # and API key, so rotating any of them invalidates the entry.
+    _models_cache: tuple = (None, None, None, None)  # (provider, base, key, models)
+
     def __init__(self, settings: AppSettings, timeout: int = 90):
         self.settings = settings
         self.timeout = timeout
-        self._models_cache: tuple = (None, None, None, None)  # (provider, base, key, models)
 
     # ------------------------------------------------------------------
     # Auth / headers
@@ -138,8 +142,11 @@ class AiClient:
 
         key = (self.settings.ai_provider, self.settings.effective_base_url,
                self.settings.ai_api_key)
-        if not force and self._models_cache[:3] == key and self._models_cache[3] is not None:
-            return self._models_cache[3]
+        # Read/write through the class: assigning to `self._models_cache` would
+        # create an instance attribute that shadows the shared entry.
+        cache = type(self)._models_cache
+        if not force and cache[:3] == key and cache[3] is not None:
+            return cache[3]
 
         provider = self.settings.ai_provider
         url = f"{self.settings.effective_base_url}/models"
@@ -157,7 +164,7 @@ class AiClient:
             raise AiError(f"Failed to list models ({res.status_code}): {detail}")
 
         model_ids = self._parse_models(res.json())
-        self._models_cache = (*key, model_ids)
+        type(self)._models_cache = (*key, model_ids)
         return model_ids
 
     def _parse_models(self, payload) -> list[str]:

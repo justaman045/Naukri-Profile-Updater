@@ -19,6 +19,19 @@ _handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message
 logger.addHandler(_handler)
 
 
+def _body_snippet(res, limit: int = 200) -> str:
+    """Bounded, single-line excerpt of a response body for error messages.
+
+    Error paths must never surface a whole HTML page or JSON blob in the UI, so
+    the text is whitespace-collapsed and clipped to `limit` characters.
+    """
+    try:
+        text = res.text or ""
+    except Exception:  # noqa: BLE001 - diagnostics must not mask the real error
+        return ""
+    return " ".join(text.split())[:limit]
+
+
 # ------------------------------------------------------------------
 # IMPORTANT — IP / HOSTING ADVICE (read before deploying)
 #################################
@@ -145,7 +158,7 @@ class NaukriLoginClient:
         res = self._login_request()
 
         if not res.ok:
-            print(res.content)
+            logger.debug("login rejected (%s): %s", res.status_code, _body_snippet(res))
             raise NaukriAuthError("Login failed")
 
         token = get_cookie(self.session, "nauk_at")
@@ -156,8 +169,10 @@ class NaukriLoginClient:
 
         try:
             self.cache["form_key"] = self.get_form_key2()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # A missing formKey is not fatal: it is only needed to re-upload a
+            # resume, and update_resume() re-scrapes it on demand.
+            logger.debug("formKey not cached during login: %r", exc)
 
         return self.naukri_session
 
@@ -223,8 +238,10 @@ class NaukriLoginClient:
 
         try:
             self.cache["form_key"] = self.get_form_key2()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # A missing formKey is not fatal: it is only needed to re-upload a
+            # resume, and update_resume() re-scrapes it on demand.
+            logger.debug("formKey not cached during login: %r", exc)
 
         return self.naukri_session
 
@@ -274,7 +291,7 @@ class NaukriLoginClient:
 
 
 
-    @with_exponential_retry(label="get_form_key")
+    @with_exponential_retry(label="get_profile_html")
     def _fetch_profile_html(self):
         return self.session.get(PROFILE_URL)
 
@@ -284,30 +301,6 @@ class NaukriLoginClient:
         # httpcloak: the shared session serves these from its cache as a
         # `304 Not Modified` with an EMPTY body, which silently hides the JS.
         return requests.get(js_url, headers=_JS_FETCH_HEADERS, timeout=30)
-
-    def get_form_key(self):
-        if not self.naukri_session:
-            raise NaukriAuthError("Login first")
-
-        res = self._fetch_profile_html()
-        html = res.text
-
-        match = APP_JS_PATTERN.search(html)
-        if not match:
-            raise NaukriParseError("JS not found")
-
-        js_url = match.group(1)
-        if js_url.startswith("//"):
-            js_url = "https:" + js_url
-
-        js = self._fetch_js(js_url).text
-
-        for pattern in FORM_KEY_PATTERNS:
-            m = pattern.search(js)
-            if m:
-                return m.group(1)
-
-        raise NaukriParseError("form key not found")
 
     @with_exponential_retry(label="get_profile_html_v2")
     def _fetch_profile_html_auth(self):
@@ -345,17 +338,23 @@ class NaukriLoginClient:
                     key = extract_resume_form_key(self._fetch_js(mnj_url).text)
                     if key:
                         return key
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("formKey: app/mnj bundle probe failed: %r", exc)
 
         # Fallback: generic scan of every script on the page.
         for js_url in js_urls:
             try:
                 key = extract_form_key2(self._fetch_js(js_url).text)
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("formKey: scan of %s failed: %r", js_url, exc)
                 continue
             if key:
                 return key
+        logger.debug(
+            "formKey: no attachCV key in app bundle or %d scanned script(s); "
+            "RESUME_FORM_KEY_PATTERNS needs updating for the current bundle",
+            len(js_urls),
+        )
         return None
 
     def get_form_key2(self):
@@ -368,14 +367,14 @@ class NaukriLoginClient:
         pages = []
         try:
             pages.append(self._fetch_profile_html_auth().text)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("formKey: authenticated profile HTML fetch failed: %r", exc)
         # The public page carries the same JS bundles, so it is a useful
         # fallback when the authenticated page is empty or missing scripts.
         try:
             pages.append(self._fetch_profile_html().text)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("formKey: public profile HTML fetch failed: %r", exc)
 
         for html in pages:
             key = self._scan_bundles_for_form_key(html or "")
@@ -418,14 +417,40 @@ class NaukriLoginClient:
         url = RESUME_DOWNLOAD_URL_TEMPLATE.format(profile_id=pid)
         res = self._download_resume_request(url)
         if not res.ok:
+            if res.status_code in (401, 403):
+                raise NaukriAuthError(
+                    f"resume download — session invalid ({res.status_code})"
+                )
             raise NaukriParseError(f"resume download failed ({res.status_code})")
-        return res.content
+        content = res.content
+        # An expired-but-not-yet-401 session (or an interstitial page) answers
+        # 200 with the HTML login page. `refresh_resume()` renames whatever it
+        # gets to `Name_Position_Month_Day_Updated.pdf` and re-uploads it, so
+        # accepting a non-PDF here would silently overwrite the user's real
+        # resume with an HTML document. Refuse it instead. The header is
+        # searched in the first 1 KiB because a PDF may carry leading bytes.
+        if b"%PDF-" not in content[:1024]:
+            raise NaukriParseError(
+                "resume download did not return a PDF "
+                f"(content-type {res.headers.get('content-type', '?')!r}, "
+                f"{len(content)} bytes) — the on-file resume was left untouched"
+            )
+        return content
 
     def fetch_profile_id(self):
         if self.profile_id:
             return self.profile_id
 
         res = self._fetch_dashboard()
+        # Guarded: on an invalid/expired session the body is an error payload
+        # (or an HTML redirect), so res.json() would raise a raw decode error
+        # and hide the 401 that the auto re-login path keys off.
+        if not res.ok:
+            if res.status_code in (401, 403):
+                raise NaukriAuthError(
+                    f"profile id fetch — session invalid ({res.status_code})"
+                )
+            raise NaukriParseError(f"profile id fetch failed ({res.status_code})")
         data = res.json()
 
         pid = data.get("profileId") or data.get("dashBoard", {}).get("profileId")
@@ -471,8 +496,12 @@ class NaukriLoginClient:
         res = self._validate_file_request(filename, file_bytes, form_key, file_key)
 
         if not res.ok:
-            print(res.request.headers.get("Content-Type"))
-            print(res.text)
+            logger.debug(
+                "file validation rejected (%s) content-type=%s body=%s",
+                res.status_code,
+                res.request.headers.get("Content-Type"),
+                _body_snippet(res),
+            )
             raise NaukriUploadError("File validation failed")
 
         try:
@@ -552,7 +581,22 @@ class NaukriLoginClient:
 
         payload = {"profile": profile_fields, "profileId": pid}
         res = self._update_profile_request(headers, payload)
-        return ProfileUpdateResult(pid, res.json(), res.status_code)
+        # Guarded: on an invalid/expired session the body is an error payload
+        # (or an HTML redirect), so an unguarded res.json() raises a raw
+        # JSONDecodeError that hides the 401 the auto re-login path keys off.
+        if not res.ok:
+            if res.status_code in (401, 403):
+                raise NaukriAuthError(
+                    f"profile update — session invalid ({res.status_code})"
+                )
+            raise NaukriParseError(
+                f"profile update failed ({res.status_code}) {_body_snippet(res)}".strip()
+            )
+        try:
+            body = res.json()
+        except Exception:
+            body = {"_non_json_body": _body_snippet(res)}
+        return ProfileUpdateResult(pid, body, res.status_code)
     
 
 

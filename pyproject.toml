@@ -30,5 +30,8 @@ dependencies = [
 [project.scripts]
 naukri-profile-update = "src.main:main"
 
-[tool.setuptools]
-packages = ["src", "src.ui", "src.core", "src.models"]
+[tool.setuptools.packages.find]
+# Discovered rather than hand-listed: a literal list silently omitted all six
+# `src.core.nope_ri*` packages, so a non-editable `pip install .` / wheel build
+# produced an install that died on `import src.core.nope_ri`.
+include = ["src", "src.*"]

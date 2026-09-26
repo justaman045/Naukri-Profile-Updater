@@ -61,7 +61,13 @@ class RefreshTab(QWidget):
         layout.addStretch(1)
         layout.addLayout(btn_row)
 
-    def set_profile(self, profile: Profile) -> None:
+    def set_profile(self, profile: Profile | None) -> None:
+        # `_last_profile` is None until the first load succeeds, so switching to
+        # this tab while the profile is still loading (or after it failed) used
+        # to dereference None and crash the app.
+        if profile is None:
+            self.preview_lbl.setText("Profile not loaded yet.")
+            return
         self.preview_lbl.setText(_refresh_filename(profile))
 
     def _refresh(self) -> None:

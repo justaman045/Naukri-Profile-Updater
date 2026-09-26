@@ -1,3 +1,5 @@
+import dataclasses
+
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -30,6 +32,7 @@ class DeveloperTab(QWidget):
         self.profile: Profile | None = None
         self._worker: ApiWorker | None = None
         self._resume_worker: ApiWorker | None = None
+        self._resume_loaded = False
 
         self.title = QLabel("Experimental Developer Tools")
         self.title.setWordWrap(True)
@@ -109,10 +112,21 @@ class DeveloperTab(QWidget):
         layout.addWidget(future)
         layout.addStretch(1)
 
-    def set_profile(self, profile: Profile) -> None:
+    def set_profile(self, profile: Profile | None) -> None:
         self.profile = profile
         self._load_current()
-        self._auto_load_resume()
+        # Deliberately does NOT pull the on-file resume here. This tab is hidden
+        # by default, and downloading + PDF-parsing the resume on every profile
+        # load was wasted bandwidth (and extra requests to Naukri) for a tool
+        # most users never open. `ensure_resume_loaded()` runs on first show.
+
+    def ensure_resume_loaded(self) -> None:
+        """Load the on-file resume the first time this tab is actually shown."""
+        if self._resume_loaded:
+            return
+        self._resume_loaded = True
+        if not self.resume_input.toPlainText().strip():
+            self._auto_load_resume()
 
     def _load_current(self) -> None:
         if not self.profile:
@@ -161,14 +175,22 @@ class DeveloperTab(QWidget):
 
     def _generate(self) -> None:
         resume = self.resume_input.toPlainText().strip()
-        if not resume:
-            self.ai_status.setText("Please provide resume content first.")
-            return
         field = self.field_combo.currentText()
         current = self.result_edit.toPlainText().strip()
-        client = AiClient(self.settings)
+        # Snapshot the settings: the rewrite runs on a worker thread while the
+        # Settings tab can mutate the shared AppSettings from the UI thread, and
+        # a half-updated config (new base URL, old key) fails confusingly.
+        client = AiClient(dataclasses.replace(self.settings))
+        if not resume:
+            # Not an error: AiClient.rewrite() falls back to a limits-only
+            # prompt when there is no resume text to condition on.
+            self.ai_status.setText(
+                "No resume content — generating from the field text and the "
+                "character limits only."
+            )
         self.gen_btn.setEnabled(False)
-        self.ai_status.setText("Generating...")
+        if resume:
+            self.ai_status.setText("Generating...")
         self._worker = ApiWorker(
             lambda: client.rewrite(field, current, resume_text=resume)
         )
