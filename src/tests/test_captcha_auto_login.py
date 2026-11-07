@@ -145,6 +145,74 @@ def test_captcha_missing_helper_shows_error(tmp_path):
         _restore()
 
 
+def test_parse_session_token_bare():
+    """A bare JWT token is parsed as bearer_token with nauk_at cookie."""
+    token, cookies = ld.LoginDialog._parse_session_token(ld.LoginDialog, "eyJhbGciOiJIUzI1NiJ9")
+    assert token == "eyJhbGciOiJIUzI1NiJ9"
+    assert cookies == {"nauk_at": "eyJhbGciOiJIUzI1NiJ9"}
+
+
+def test_parse_session_token_cookie_fragment():
+    """nauk_at=eyJ... is parsed correctly."""
+    token, cookies = ld.LoginDialog._parse_session_token(ld.LoginDialog, "nauk_at=eyJhbGciOiJIUzI1NiJ9")
+    assert token == "eyJhbGciOiJIUzI1NiJ9"
+    assert cookies == {"nauk_at": "eyJhbGciOiJIUzI1NiJ9"}
+
+
+def test_parse_session_token_cookie_header():
+    """Raw Cookie header with nauk_at among other cookies."""
+    token, cookies = ld.LoginDialog._parse_session_token(
+        ld.LoginDialog, "nauk_at=eyJhbGciOiJIUzI1NiJ9; _ga=GA1.2.abc; theme=dark"
+    )
+    assert token == "eyJhbGciOiJIUzI1NiJ9"
+    assert cookies == {"nauk_at": "eyJhbGciOiJIUzI1NiJ9"}
+
+
+def test_parse_session_token_bearer():
+    """Bearer eyJ... prefix is stripped."""
+    token, cookies = ld.LoginDialog._parse_session_token(
+        ld.LoginDialog, "Bearer eyJhbGciOiJIUzI1NiJ9"
+    )
+    assert token == "eyJhbGciOiJIUzI1NiJ9"
+    assert cookies == {"nauk_at": "eyJhbGciOiJIUzI1NiJ9"}
+
+
+def test_parse_session_token_empty():
+    """Empty input yields empty token and no cookies."""
+    token, cookies = ld.LoginDialog._parse_session_token(ld.LoginDialog, "")
+    assert token == ""
+    assert cookies == {}
+
+
+def test_apply_session_accepts_dialog(tmp_path):
+    """Pasting a valid session token saves the session and accepts the dialog."""
+    sess = tmp_path / "session.json"
+    ld.ROOT = tmp_path
+    session_store.SESSION_FILE = sess
+    try:
+        app = QApplication.instance() or QApplication(sys.argv)
+        dlg = ld.LoginDialog()
+        dlg.email.setText("user@example.com")
+        dlg.show()
+        app.processEvents()
+
+        # Simulate the frozen-build flow: show session input, paste token, apply.
+        dlg.session_input.setText("eyJhbGciOiJIUzI1NiJ9")
+        dlg._on_apply_session()
+
+        assert dlg.result() == QDialog.DialogCode.Accepted
+        assert dlg.manager is not None
+        assert dlg.manager.has_saved_session
+
+        # Verify session.json was written.
+        import json
+        saved = json.loads(sess.read_text(encoding="utf-8"))
+        assert saved["bearer_token"] == "eyJhbGciOiJIUzI1NiJ9"
+        assert saved["cookies"] == {"nauk_at": "eyJhbGciOiJIUzI1NiJ9"}
+    finally:
+        _restore()
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="naukri_captcha_test_"))
 
@@ -155,7 +223,13 @@ def main() -> int:
         # QProcess/deleteLater can leave Qt in a state where a freshly created
         # dialog doesn't process its error label correctly.
         ("test_captcha_missing_helper_shows_error", lambda: test_captcha_missing_helper_shows_error(tmp)),
+        ("test_parse_session_token_bare", test_parse_session_token_bare),
+        ("test_parse_session_token_cookie_fragment", test_parse_session_token_cookie_fragment),
+        ("test_parse_session_token_cookie_header", test_parse_session_token_cookie_header),
+        ("test_parse_session_token_bearer", test_parse_session_token_bearer),
+        ("test_parse_session_token_empty", test_parse_session_token_empty),
         ("test_captcha_auto_login_adopts_session", lambda: test_captcha_auto_login_adopts_session(tmp)),
+        ("test_apply_session_accepts_dialog", lambda: test_apply_session_accepts_dialog(tmp)),
         ("test_captcha_broken_helper_shows_error", lambda: test_captcha_broken_helper_shows_error(tmp)),
     ]
 

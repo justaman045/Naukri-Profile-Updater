@@ -1,7 +1,8 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QProcess
+from PySide6.QtCore import QProcess, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,6 +23,8 @@ from src.core.worker import ApiWorker
 from src.ui._label_utils import make_wrapping_status_label
 
 ROOT = Path(__file__).resolve().parents[2]
+
+NAUKRI_LOGIN_URL = "https://www.naukri.com/nlogin/login"
 
 
 class LoginDialog(QDialog):
@@ -60,6 +63,23 @@ class LoginDialog(QDialog):
 
         self.status_label = make_wrapping_status_label()
 
+        # --- Captcha / manual session (shown when browser login is needed) ---
+        self.session_input = QLineEdit()
+        self.session_input.setPlaceholderText(
+            "Paste your nauk_at cookie or Bearer token here"
+        )
+        self.session_input.setEchoMode(QLineEdit.Password)
+        self.session_input.returnPressed.connect(self._on_apply_session)
+        self.session_input.setVisible(False)
+
+        self.apply_session_btn = QPushButton("Apply session")
+        self.apply_session_btn.clicked.connect(self._on_apply_session)
+        self.apply_session_btn.setVisible(False)
+
+        self.session_hint = make_wrapping_status_label()
+        self.session_hint.setStyleSheet("color: #6c7a89;")
+        self.session_hint.setVisible(False)
+
         self.login_btn = QPushButton("Login")
         self.login_btn.setDefault(True)
         self.login_btn.clicked.connect(self._on_login_clicked)
@@ -82,6 +102,9 @@ class LoginDialog(QDialog):
         layout.addWidget(self.remember_check)
         layout.addWidget(self.error_label)
         layout.addWidget(self.status_label)
+        layout.addWidget(self.session_input)
+        layout.addWidget(self.apply_session_btn)
+        layout.addWidget(self.session_hint)
         layout.addLayout(buttons)
 
         # Prefill last so the combo's selection signal fills the fields.
@@ -186,13 +209,13 @@ class LoginDialog(QDialog):
         (captcha included), verifies the captured cookies, and saves the session
         to ``~/.naukri-profile-update/session.json``. We then adopt that session
         and continue as if the password login had succeeded.
+
+        In frozen (packaged) builds the helper script is not bundled, so we open
+        Naukri's login page in the user's default browser and let them paste the
+        captured session token back into this dialog.
         """
         if getattr(sys, "frozen", False):
-            self._show_error(
-                "Naukri requires a captcha. Run `python login_via_browser.py "
-                "--channel chrome --verify` from a source checkout, then start "
-                "the app again."
-            )
+            self._open_browser_for_manual_session()
             return
         script = ROOT / "login_via_browser.py"
         if not script.is_file():
@@ -228,6 +251,108 @@ class LoginDialog(QDialog):
             "there (including the captcha) and this window will continue."
         )
         proc.start()
+
+    def _open_browser_for_manual_session(self) -> None:
+        """Frozen-build fallback: open Naukri login in the default browser and
+        ask the user to paste their session token."""
+        self.error_label.setVisible(False)
+        self.login_btn.setEnabled(False)
+
+        # Open Naukri login page so the user can authenticate (captcha included).
+        QDesktopServices.openUrl(QUrl(NAUKRI_LOGIN_URL))
+
+        self.session_input.setVisible(True)
+        self.apply_session_btn.setVisible(True)
+        self.session_hint.setVisible(True)
+        self.session_hint.setText(
+            "Log in to Naukri in the opened browser (complete any captcha), "
+            "then copy your ``nauk_at`` cookie or Bearer token and paste it "
+            "below. The app will remember you across launches."
+        )
+        self.status_label.setText(
+            "Naukri requires a captcha — please log in in the browser, then "
+            "paste your session token below."
+        )
+        self.session_input.setFocus()
+        self.layout().activate()
+        self.adjustSize()
+
+    def _parse_session_token(self, raw: str) -> tuple[str, dict[str, str]]:
+        """Parse a session token pasted by the user.
+
+        Accepts:
+        * a bare token: ``eyJ...``
+        * a cookie fragment: ``nauk_at=eyJ...``
+        * a raw Cookie header: ``nauk_at=eyJ...; other=value``
+        * a Bearer header: ``Bearer eyJ...``
+
+        Returns ``(bearer_token, cookies_dict)``.
+        """
+        text = raw.strip()
+        if not text:
+            return "", {}
+
+        # Strip "Bearer " prefix if present.
+        if text.lower().startswith("bearer "):
+            text = text[7:].strip()
+
+        cookies: dict[str, str] = {}
+
+        # If it looks like a cookie fragment (contains "="), extract nauk_at.
+        if "=" in text:
+            for part in text.replace("\n", ";").replace("\r", ";").split(";"):
+                part = part.strip()
+                if not part or "=" not in part:
+                    continue
+                name, value = part.split("=", 1)
+                name = name.strip()
+                value = value.strip()
+                if name.lower() == "nauk_at":
+                    cookies[name] = value
+                    return value, cookies
+            # No nauk_at found; treat the whole thing as the token.
+            cookies["nauk_at"] = text
+            return text, cookies
+
+        # Bare token.
+        cookies["nauk_at"] = text
+        return text, cookies
+
+    def _on_apply_session(self) -> None:
+        """Apply a session token pasted by the user (frozen-build flow)."""
+        raw = self.session_input.text()
+        bearer_token, cookies = self._parse_session_token(raw)
+        if not bearer_token:
+            self._show_error("Please paste a valid session token.")
+            return
+
+        self.login_btn.setEnabled(False)
+        self.apply_session_btn.setEnabled(False)
+
+        try:
+            data = session_store.SessionData(
+                username=self.email.text().strip() or "",
+                bearer_token=bearer_token,
+                cookies=cookies,
+            )
+            session_store.save_session(data)
+
+            manager = NaukriManager(
+                data.username or self.email.text().strip(),
+                "",
+                use_saved_session=True,
+                session_data=data,
+            )
+            if manager.has_saved_session:
+                self.manager = manager
+                self.accept()
+                return
+            self._show_error("Saved session could not be validated.")
+        except Exception as exc:  # noqa: BLE001 - surface parse/save errors
+            self._show_error(f"Invalid session token: {exc}")
+        finally:
+            self.login_btn.setEnabled(True)
+            self.apply_session_btn.setEnabled(True)
 
     def _on_browser_login_finished(self, exit_code: int, status) -> None:
         proc = self._browser_proc

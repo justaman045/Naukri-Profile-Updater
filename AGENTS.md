@@ -55,7 +55,10 @@ profile, fully headless over HTTP (no browser, Selenium or Playwright).
 
 ## Login helper (captcha workaround)
 
-- Password login is captcha-gated; a 403 body carrying `captchaSiteKey` raises `NaukriCaptchaError` (a `NaukriAuthError` subclass). `LoginDialog` catches that type and **auto-runs** `python login_via_browser.py --channel chrome --verify -e <email>` via `QProcess`, then adopts the verified session it saves. The helper needs `requirements-dev.txt` (playwright; `python -m playwright install chromium` for `--channel chromium`); if it cannot run (missing deps/script, frozen build) its output is surfaced in the dialog. `python inject_session.py --from-browser chrome -e <email> --verify` is the manual alternative. Both helpers call `ensure_credential()` so the account is remembered without touching any stored password.
+- Password login is captcha-gated; a 403 body carrying `captchaSiteKey` raises `NaukriCaptchaError` (a `NaukriAuthError` subclass). `LoginDialog` catches that type:
+  - **Source checkout**: auto-runs `python login_via_browser.py --channel chrome --verify -e <email>` via `QProcess`, then adopts the verified session it saves. Needs `requirements-dev.txt` (playwright; `python -m playwright install chromium` for `--channel chromium`). `python inject_session.py --from-browser chrome -e <email> --verify` is the manual alternative.
+  - **Frozen/standalone build** (the `.exe` users download): `login_via_browser.py` is not bundled, so the dialog opens `https://www.naukri.com/nlogin/login` in the user's default browser via `QDesktopServices.openUrl()`, shows a "Paste your session token" field, and the user pastes their `nauk_at` cookie or Bearer token after logging in manually (captcha included). Accepts bare token, `nauk_at=...`, raw Cookie header, or `Bearer ...` formats. The token is saved to `session.json` and the app auto-logs in from then on.
+- Both helpers call `ensure_credential()` so the account is remembered without touching any stored password.
 
 ## Packaging
 
