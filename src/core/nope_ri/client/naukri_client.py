@@ -158,7 +158,15 @@ class NaukriLoginClient:
         res = self._login_request()
 
         if not res.ok:
-            logger.debug("login rejected (%s): %s", res.status_code, _body_snippet(res))
+            body = _body_snippet(res)
+            logger.debug("login rejected (%s): %s", res.status_code, body)
+            if "captchaSiteKey" in body:
+                # Naukri now gates password login behind a captcha, which a
+                # headless HTTP client can never satisfy. The dedicated type
+                # lets the UI launch the browser-login helper automatically.
+                raise NaukriCaptchaError(
+                    "Naukri requires a captcha, so password login cannot finish."
+                )
             raise NaukriAuthError("Login failed")
 
         token = get_cookie(self.session, "nauk_at")

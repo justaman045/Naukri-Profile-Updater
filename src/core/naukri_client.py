@@ -2,7 +2,11 @@ from typing import Callable, Optional, TypeVar
 import re
 
 from src.core.nope_ri.client.naukri_client import NaukriLoginClient
-from src.core.nope_ri.exceptions.exceptions import NaukriAuthError, NaukriParseError
+from src.core.nope_ri.exceptions.exceptions import (
+    NaukriAuthError,
+    NaukriCaptchaError,
+    NaukriParseError,
+)
 from src.core.nope_ri.models.models import (
     NaukriSession,
     ProfileUpdateResult,

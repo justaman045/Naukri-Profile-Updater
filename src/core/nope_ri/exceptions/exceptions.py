@@ -13,6 +13,16 @@ class NaukriAuthError(NaukriClientError):
         super().__init__(msg)
 
 
+class NaukriCaptchaError(NaukriAuthError):
+    """Login refused because Naukri demands an interactive captcha.
+
+    A headless HTTP client can never satisfy the captcha widget, so the UI uses
+    this type to launch the browser-login helper instead of showing a dead end.
+    It stays a ``NaukriAuthError`` so the normal auth-failure paths still apply.
+    """
+    pass
+
+
 class NaukriNetworkError(NaukriClientError):
     """Network / request failures (timeouts, connection issues)."""
 

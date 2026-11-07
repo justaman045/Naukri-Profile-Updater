@@ -97,6 +97,29 @@ def save_credential(email: str, password: str, remember_password: bool) -> Optio
     return cred
 
 
+def ensure_credential(email: str) -> Optional[Credential]:
+    """Make sure `email` is in the account picker without touching its secret.
+
+    The browser-login and cookie-inject helpers authenticate out-of-band, so they
+    only know the email. If the account already exists, its stored password and
+    "remember" flag are left exactly as they were and only ``last_used`` is
+    refreshed; otherwise an email-only entry is added.
+    """
+    target = (email or "").strip()
+    if not target:
+        return None
+    existing = get_credential(target)
+    if existing is not None:
+        return touch_credential(existing.email)
+    cred = Credential(email=target, last_used=time.time())
+    merged = [
+        c for c in list_credentials() if c.email.strip().lower() != target.lower()
+    ]
+    merged.append(cred)
+    _write_all(merged)
+    return cred
+
+
 def touch_credential(email: str) -> Optional[Credential]:
     """Mark an account as just used, leaving its stored password untouched.
 

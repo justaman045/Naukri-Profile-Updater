@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -11,9 +15,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.core import session_store
 from src.core.credentials import get_credential, list_credentials, save_credential
-from src.core.naukri_client import NaukriManager
+from src.core.naukri_client import NaukriCaptchaError, NaukriManager
 from src.core.worker import ApiWorker
+from src.ui._label_utils import make_wrapping_status_label
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class LoginDialog(QDialog):
@@ -24,6 +32,7 @@ class LoginDialog(QDialog):
         self.setMinimumWidth(360)
         self.manager: NaukriManager | None = None
         self._worker: ApiWorker | None = None
+        self._browser_proc: QProcess | None = None
 
         # --- Saved accounts ---
         self.account_combo = QComboBox()
@@ -45,12 +54,11 @@ class LoginDialog(QDialog):
             "next to the saved session. Leave unchecked to save only the email."
         )
 
-        self.error_label = QLabel("")
+        self.error_label = make_wrapping_status_label()
         self.error_label.setStyleSheet("color: #c0392b;")
-        self.error_label.setWordWrap(True)
         self.error_label.setVisible(False)
 
-        self.status_label = QLabel("")
+        self.status_label = make_wrapping_status_label()
 
         self.login_btn = QPushButton("Login")
         self.login_btn.setDefault(True)
@@ -164,8 +172,128 @@ class LoginDialog(QDialog):
 
     def _on_login_failure(self, exc: Exception) -> None:
         self._set_busy(False)
+        if isinstance(exc, NaukriCaptchaError):
+            # Naukri's password login is captcha-gated. Don't dead-end on an
+            # error the user cannot act on — open the browser helper instead.
+            self._start_browser_login()
+            return
         self._show_error(str(exc) or "Login failed. Check your credentials and network.")
+
+    def _start_browser_login(self) -> None:
+        """Run ``login_via_browser.py`` when the captcha blocks password login.
+
+        The helper opens a real browser, waits for the user to finish logging in
+        (captcha included), verifies the captured cookies, and saves the session
+        to ``~/.naukri-profile-update/session.json``. We then adopt that session
+        and continue as if the password login had succeeded.
+        """
+        if getattr(sys, "frozen", False):
+            self._show_error(
+                "Naukri requires a captcha. Run `python login_via_browser.py "
+                "--channel chrome --verify` from a source checkout, then start "
+                "the app again."
+            )
+            return
+        script = ROOT / "login_via_browser.py"
+        if not script.is_file():
+            self._show_error(
+                "Naukri requires a captcha, but the browser login helper "
+                "(login_via_browser.py) was not found."
+            )
+            return
+        if (
+            self._browser_proc is not None
+            and self._browser_proc.state() != QProcess.ProcessState.NotRunning
+        ):
+            return
+
+        args = [str(script), "--channel", "chrome", "--verify"]
+        email = self.email.text().strip()
+        if email:
+            args += ["-e", email]
+
+        proc = QProcess(self)
+        proc.setProgram(sys.executable)
+        proc.setArguments(args)
+        proc.setWorkingDirectory(str(ROOT))
+        proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        proc.finished.connect(self._on_browser_login_finished)
+        proc.errorOccurred.connect(self._on_browser_login_error)
+        self._browser_proc = proc
+
+        self.error_label.setVisible(False)
+        self.login_btn.setEnabled(False)
+        self.status_label.setText(
+            "Naukri requires a captcha — opening a browser. Finish logging in "
+            "there (including the captcha) and this window will continue."
+        )
+        proc.start()
+
+    def _on_browser_login_finished(self, exit_code: int, status) -> None:
+        proc = self._browser_proc
+        self._browser_proc = None
+        output = ""
+        if proc is not None:
+            output = bytes(proc.readAllStandardOutput()).decode("utf-8", "replace").strip()
+            proc.deleteLater()
+        self.login_btn.setEnabled(True)
+
+        if status == QProcess.ExitStatus.NormalExit and exit_code == 0:
+            data = session_store.load_session()
+            if data and data.bearer_token:
+                manager = NaukriManager(
+                    data.username or self.email.text().strip(),
+                    "",
+                    use_saved_session=True,
+                )
+                if manager.has_saved_session:
+                    self.manager = manager
+                    self.accept()
+                    return
+            self._show_error(
+                "Browser login finished, but no saved Naukri session was found."
+            )
+            return
+
+        tail = output[-400:].replace("\r", "")
+        self._show_error(
+            "Browser login failed or was cancelled."
+            + (f"\n\n{tail}" if tail else "")
+        )
+
+    def _on_browser_login_error(self, error) -> None:
+        # `finished` also fires for crash/timeout; only FailedToStart happens
+        # before the process ever ran, so it needs its own cleanup.
+        if error != QProcess.ProcessError.FailedToStart:
+            return
+        proc = self._browser_proc
+        self._browser_proc = None
+        if proc is not None:
+            proc.deleteLater()
+        self.login_btn.setEnabled(True)
+        self._show_error(
+            "Could not start the browser login helper. Run it manually: "
+            "`python login_via_browser.py --channel chrome --verify`."
+        )
+
+    def _stop_browser_login(self) -> None:
+        proc = self._browser_proc
+        self._browser_proc = None
+        if proc is None:
+            return
+        if proc.state() != QProcess.ProcessState.NotRunning:
+            proc.kill()
+            proc.waitForFinished(1000)
+        proc.deleteLater()
+
+    def reject(self) -> None:
+        self._stop_browser_login()
+        super().reject()
 
     def _show_error(self, msg: str) -> None:
         self.error_label.setText(msg)
         self.error_label.setVisible(True)
+        # The dialog opens at its compact sizeHint; a multi-line error (e.g. the
+        # captcha/cookie helper hint) would otherwise be clipped at the bottom.
+        self.layout().activate()
+        self.adjustSize()
