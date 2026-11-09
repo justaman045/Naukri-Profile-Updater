@@ -5,7 +5,7 @@ setlocal
 
 cd /d "%~dp0"
 
-echo [1/3] Creating virtual environment...
+echo [1/4] Creating virtual environment...
 if not exist .venv (
     python -m venv .venv
 ) else (
@@ -14,15 +14,26 @@ if not exist .venv (
 
 call .venv\Scripts\activate.bat
 
-echo [2/3] Installing dependencies + pyinstaller...
+echo [2/4] Installing dependencies + pyinstaller...
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt pyinstaller
 
-echo [3/3] Building standalone .exe...
+echo [3/4] Building standalone .exe...
+REM build.py verifies the artifact before returning: it fails if httpcloak's
+REM native library (or one of its dependencies) is missing from the bundle.
 python build.py --onefile
 
+echo [4/4] Building one-folder distribution (no %TEMP% extraction)...
+python build.py
+python -c "import shutil; shutil.make_archive('dist/NaukriProfileManager-windows-ondir', 'zip', 'dist/NaukriProfileManager')"
+
 echo.
-echo Done. Look for: dist\NaukriProfileManager.exe
-echo (A one-folder build is also produced if you drop --onefile.)
+echo Done. Look for:
+echo   dist\NaukriProfileManager.exe          (single file)
+echo   dist\NaukriProfileManager\             (one folder)
+echo   dist\NaukriProfileManager-windows-ondir.zip
+echo.
+echo If the .exe will not start on your machine, unzip the one-folder build
+echo and run NaukriProfileManager.exe from inside it.
 pause
 endlocal

@@ -28,6 +28,19 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Install diagnostics BEFORE importing anything heavy. In a packaged build a
+# missing or mismatched DLL raises *during import*, and that is exactly the
+# failure we need a traceback for — the windowed executable has no console,
+# so without this the user only sees "Failed to execute script: main".
+from src.core.diagnostics import (  # noqa: E402
+    install_excepthooks,
+    log_startup_info,
+    setup_logging,
+)
+
+setup_logging()
+install_excepthooks()
+
 from PySide6.QtWidgets import QApplication
 
 from src.core.naukri_client import NaukriManager
@@ -56,6 +69,7 @@ def _resolve_manager(prefill_email: str = "") -> NaukriManager | None:
 
 
 def main() -> int:
+    log_startup_info()
     app = QApplication(sys.argv)
     app.setApplicationName("Naukri Profile Manager")
 

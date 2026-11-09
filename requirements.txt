@@ -1,4 +1,9 @@
 PySide6-Essentials>=6.8
 requests>=2.31
-httpcloak>=1.6
+# Pinned on purpose: httpcloak ships a native library (libhttpcloak-<os>-<arch>)
+# whose file name and companion DLLs build.py has to locate and bundle. An
+# upstream rename or layout change would silently produce an executable that
+# dies with "Could not find httpcloak library", so upgrade deliberately and
+# re-run the bundle verifier (tools/verify_bundle.py) afterwards.
+httpcloak==1.7.3
 pypdf>=4.0

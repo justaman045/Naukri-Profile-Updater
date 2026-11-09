@@ -9,7 +9,8 @@ profile, fully headless over HTTP (no browser, Selenium or Playwright).
 - Run: `python src/main.py` (or `pip install -e . && naukri-profile-update`). Must run inside the venv — `src/main.py` hard-exits unless `VIRTUAL_ENV` is set or `sys.frozen` (packaged exe exempt).
 - Headless UI import smoke test (the only real check — **no test/lint/typecheck tooling is configured**, don't invent commands):
   `QT_QPA_PLATFORM=offscreen python -c "from src.ui.main_window import MainWindow"`
-- Build: `python build.py` (onedir), `--onefile`, `--versioned` (implies `--onefile`). Auto-installs PyInstaller; `build_windows.bat` helper. `--version X` rewrites `_FALLBACK_VERSION` in `src/core/version.py` → check `git status` afterwards.
+- Build: `python build.py` (onedir), `--onefile`, `--versioned` (implies `--onefile`). Auto-installs PyInstaller; `build_windows.bat` helper. `--version X` rewrites `_FALLBACK_VERSION` in `src/core/version.py` → check `git status` afterwards. Every build ends with `tools/verify_bundle.py` on the produced artifact — a failure there must fail the build.
+- Tests (plain scripts, no pytest): `QT_QPA_PLATFORM=offscreen python src/tests/test_captcha_auto_login.py` and `QT_QPA_PLATFORM=offscreen python src/tests/test_native_lib.py`.
 - `pyproject.toml` uses `[tool.setuptools.packages.find] include = ["src", "src.*"]` — keep auto-discovery; a hand-maintained list once silently omitted all six `src.core.nope_ri*` subpackages.
 
 ## Wiring you can't infer from filenames
@@ -64,9 +65,22 @@ profile, fully headless over HTTP (no browser, Selenium or Playwright).
 
 - PyInstaller: no cross-compile; needs `--paths ROOT --windowed`; spec is generated and gitignored — edit `build.py`; httpcloak native lib must go to bare `httpcloak/lib` dir; keep `--collect-all PySide6 --collect-all shiboken6`; install `PySide6-Essentials` not `PySide6`; keep Designer plugin parking in `build.py`.
 - `_version_info()` sanitizer: Windows VERSIONINFO needs strictly numeric 4-part vers/`prodvers`; PyInstaller evals the file as Python — keep the sanitizer.
+- **httpcloak's native library is not collected by PyInstaller.** `build.py::_httpcloak_lib()` locates `libhttpcloak-<os>-<arch>.<ext>` (glob-tolerant) and bundles the whole `httpcloak/lib/` directory into `httpcloak/lib` — the exact path httpcloak's `_get_lib_path()` searches. It **raises `SystemExit` when the library is missing**: a bundle without it builds green and dies on the user's machine with "Could not find httpcloak library". Never downgrade that to a warning.
+- **`httpcloak` is pinned in `requirements.txt`** (`httpcloak==1.7.3`) because the native file name and its companion DLLs are part of the packaging contract. Bump deliberately, then rebuild and re-verify.
+- **Every build is verified.** `build.py` calls `tools/verify_bundle.py` on the artifact and refuses to finish when it fails; CI runs it again as its own step. The verifier checks (a) the native lib is in the bundle and (b) its whole dependency closure is too — on Windows the httpcloak DLL is MinGW-built and needs `libgcc_s_seh-1.dll` plus OpenSSL DLLs. A missing dependency surfaces as `[WinError 126] The specified module could not be found`, which never names the DLL at fault.
+- **Windows onedir is published alongside the onefile `.exe`.** The `.exe` extracts itself into `%TEMP%` on every launch, where antivirus quarantines files; the one-folder zip is the escape hatch. Don't drop it.
+
+## Diagnostics (the windowed build has no console)
+
+- `src/core/diagnostics.py` writes `~/.naukri-profile-update/app.log` (rotating) and `~/.naukri-profile-update/error.log` (crash tracebacks). `src/main.py` installs the hooks **before importing PySide6** — a mismatched DLL raises *during import*, and that is exactly the failure the log exists for.
+- `sys.excepthook` **and** `threading.excepthook` are both hooked: the app does all network I/O on an `ApiWorker` thread, so a crash there would otherwise vanish.
+- `src/core/native_lib.py` resolves httpcloak's native library, registers its directory with `os.add_dll_directory()` on Windows, and exports `HTTPCLOAK_LIB_PATH` (which httpcloak honours ahead of its own `__file__` guessing). `NaukriManager.__init__` calls `ensure_native_lib()` **before** constructing the vendored client — httpcloak loads the library eagerly in `Session.__init__`, so this is the last chance to turn a bare `OSError` into an actionable `NativeLibError`.
+- Never remove the diagnostics to "clean up" — without them every Windows failure report is an unusable "some DLL is not found".
 
 ## CI / release
 
 - 4-job matrix (windows/ubuntu/macos-15-intel/macos-15 arm64, py3.12) runs `python build.py --onefile --versioned --version <NEXT>`; every push to `master` auto-releases; release job bumps version + `_FALLBACK_VERSION`, rewrites README version strings, commits `chore(release): v<NEXT> [skip ci]`, pushes tag, publishes via `gh release create`; duplicate-tag guard.
+- The Windows job also runs `python build.py` (onedir) and zips it with `shutil.make_archive` → `NaukriProfileManager-<ver>-windows-x86_64-ondir.zip`. Don't use the `zip` CLI — it is not guaranteed to be on the runner's PATH.
+- The release job's README rewrite is regex-based (`vX.Y.Z` and `-X.Y.Z-`); the onedir asset name contains `-X.Y.Z-` so it is rewritten along with the rest.
 - Don't hand-bump README version strings (bot regexes every `vX.Y.Z` / `-X.Y.Z-`).
 - Pin `actions/upload-artifact@v4.6.2+`; `gh run upload` doesn't exist. Expected noise: macOS Node 20 deprecation (→Node 24); Linux `libxcb-*.so` WARNINGs (non-fatal).

@@ -14,6 +14,7 @@ from src.core.nope_ri.models.models import (
 )
 from src.core.nope_ri.utils.cookies import cookies_to_dict, set_cookies
 from src.core import session_store
+from src.core.native_lib import ensure_native_lib
 from src.models.profile import Profile
 
 T = TypeVar("T")
@@ -67,6 +68,12 @@ class NaukriManager:
         use_saved_session: bool = True,
         session_data: Optional[session_store.SessionData] = None,
     ):
+        # httpcloak loads its native library the first time a Session is
+        # constructed, which happens inside NaukriLoginClient.__init__ just
+        # below. Resolve and load it here so a missing DLL (or a missing
+        # dependency of that DLL) produces an actionable error instead of a
+        # bare OSError that kills the GUI process before any window opens.
+        ensure_native_lib()
         self.client = NaukriLoginClient(username, password)
         self.username = username
         self.use_saved_session = use_saved_session

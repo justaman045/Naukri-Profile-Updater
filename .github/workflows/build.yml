@@ -20,7 +20,9 @@ jobs:
           - os: windows-latest
             os_label: windows
             arch: x86_64
-            path: dist/*.exe
+            path: |
+              dist/NaukriProfileManager-*-windows-x86_64.exe
+              dist/NaukriProfileManager-*-windows-x86_64-ondir.zip
           - os: ubuntu-latest
             os_label: linux
             arch: x86_64
@@ -54,8 +56,54 @@ jobs:
           NEXT=$(python -c 'import tomllib; d=tomllib.load(open("pyproject.toml","rb")); a,b,c=(int(x) for x in d["project"]["version"].split(".")); print(f"{a}.{b+1}.0")')
           echo "next=$NEXT" >> "$GITHUB_OUTPUT"
 
+      # build.py verifies the artifact it just produced (see tools/verify_bundle.py)
+      # and exits non-zero when httpcloak's native library or one of its
+      # dependencies is missing. That check is what keeps a "green" build from
+      # shipping an executable that dies with "The specified module could not
+      # be found" on every user's machine.
       - name: Build single-file executable
         run: python build.py --onefile --versioned --version "${{ steps.ver.outputs.next }}"
+
+      - name: Verify bundle contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for f in dist/NaukriProfileManager-*-${{ matrix.os_label }}-${{ matrix.arch }}*; do
+            [ -e "$f" ] || continue
+            case "$f" in *.zip) continue ;; esac
+            echo "::group::Verifying $f"
+            python tools/verify_bundle.py "$f"
+            echo "::endgroup::"
+            found=1
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No artifact matched dist/NaukriProfileManager-*-${{ matrix.os_label }}-${{ matrix.arch }}*"
+            ls -la dist || true
+            exit 1
+          fi
+
+      # The onefile executable unpacks itself into %TEMP% on every launch, which
+      # is where antivirus software tends to quarantine files (and where a
+      # blocked extraction looks exactly like a missing DLL). Ship a one-folder
+      # build as well: it runs straight from its own directory, no extraction.
+      - name: Build one-folder distribution (Windows)
+        if: matrix.os_label == 'windows'
+        shell: bash
+        env:
+          NEXT: ${{ steps.ver.outputs.next }}
+        run: |
+          set -euo pipefail
+          python build.py --version "$NEXT"
+          python - <<'PY'
+          import os
+          import shutil
+
+          version = os.environ["NEXT"]
+          base = f"dist/NaukriProfileManager-{version}-windows-x86_64-ondir"
+          shutil.make_archive(base, "zip", "dist/NaukriProfileManager")
+          print("created", base + ".zip")
+          PY
 
       - name: Upload executable
         uses: actions/upload-artifact@v4.6.2
@@ -123,6 +171,7 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         env:
           NEXT: ${{ steps.ver.outputs.next }}
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -165,12 +214,15 @@ jobs:
               echo "Changes since $prev: https://github.com/${{ github.repository }}/compare/$prev...v$NEXT"
             fi
             echo
-            echo "- Windows x86_64: \`.exe\`"
+            echo "- Windows x86_64: \`.exe\` (single file) and \`-ondir.zip\` (one folder)"
             echo "- Linux x86_64"
             echo "- macOS x86_64 (Intel)"
             echo "- macOS arm64 (Apple Silicon)"
             echo
             echo "Unsigned build — Windows SmartScreen and macOS Gatekeeper may warn; see README."
+            echo
+            echo "If the Windows \`.exe\` will not start, download the \`-ondir.zip\` instead:"
+            echo "it runs from its own folder and never unpacks itself into \`%TEMP%\`."
           } > NOTES.md
 
       - name: Create GitHub Release

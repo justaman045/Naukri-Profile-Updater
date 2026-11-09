@@ -11,6 +11,7 @@ NOTE: PyInstaller does NOT cross-compile. Build on Windows (for .exe),
 macOS (for .app), and Linux separately, each on its own OS.
 """
 import argparse
+import os
 import platform
 import re
 import shutil
@@ -96,12 +97,22 @@ def _version_info(path: Path, version: str) -> None:
     )
 
 
-def _httpcloak_lib() -> tuple[Path, str] | None:
+def _httpcloak_lib() -> tuple[Path, Path]:
     """Locate httpcloak's native shared library.
 
-    httpcloak loads libhttpcloak-{os}-{arch}.so/.dll/.dylib at runtime by
-    searching next to its package dir, so PyInstaller does NOT auto-bundle it.
-    We find it in the installed package and return (source_path, dest_relpath).
+    Returns ``(lib_file, bundle_source)``:
+
+    * ``lib_file`` — the platform-specific shared library itself;
+    * ``bundle_source`` — what to hand to ``--add-binary``. Usually the whole
+      ``lib`` directory, so companion libraries that ship beside it (the
+      MinGW runtime ``libgcc_s_seh-1.dll`` and the OpenSSL DLLs that the
+      Windows build needs) travel with the bundle instead of being resolved
+      from the user's machine.
+
+    Raises ``SystemExit`` when the library cannot be found. Failing the build
+    is deliberate: a bundle without it builds cleanly, passes CI, and then
+    dies on the user's machine with "Could not find httpcloak library" — the
+    single most confusing failure this project has shipped.
     """
     import httpcloak
 
@@ -118,10 +129,50 @@ def _httpcloak_lib() -> tuple[Path, str] | None:
     else:
         lib_name = f"libhttpcloak-linux-{arch}.so"
 
-    for cand in (pkg / lib_name, pkg / "lib" / lib_name):
-        if cand.exists():
-            return cand, "httpcloak/lib"
-    return None
+    lib_dir = pkg / "lib"
+    searched = [lib_dir, pkg]
+
+    for directory in searched:
+        candidate = directory / lib_name
+        if candidate.is_file():
+            return candidate, (lib_dir if directory == lib_dir else candidate)
+        # Tolerate an upstream rename or a version suffix.
+        stem, ext = os.path.splitext(lib_name)
+        for pattern in (f"{stem}*{ext}", f"libhttpcloak*{ext}"):
+            matches = sorted(p for p in directory.glob(pattern) if p.is_file())
+            if matches:
+                return matches[0], (lib_dir if directory == lib_dir else matches[0])
+
+    version = getattr(httpcloak, "__version__", "unknown")
+    raise SystemExit(
+        "ERROR: could not find httpcloak's native library.\n"
+        f"  expected file : {lib_name}\n"
+        f"  httpcloak     : {version}\n"
+        f"  searched      : {', '.join(str(d) for d in searched)}\n"
+        "The resulting bundle would fail at start-up on every user's machine.\n"
+        "Refusing to build — install a matching httpcloak version or update "
+        "the expected library name in build.py."
+    )
+
+
+def _verify_artifact(artifact: Path) -> None:
+    """Fail the build when the native library is missing from the artifact.
+
+    A bundle without httpcloak's native library builds fine and dies on the
+    user's machine with "Could not find httpcloak library". Checking the
+    artifact we just produced turns that into a red build instead.
+    """
+    verifier = ROOT / "tools" / "verify_bundle.py"
+    if not verifier.is_file():
+        print(f"WARNING: {verifier} not found — skipping bundle verification.")
+        return
+    print("Verifying bundle contents ...")
+    result = subprocess.run([sys.executable, str(verifier), str(artifact)], cwd=ROOT)
+    if result.returncode != 0:
+        raise SystemExit(
+            f"ERROR: bundle verification failed for {artifact}. Refusing to "
+            "publish an artifact that would fail at start-up."
+        )
 
 
 def _pyside6_designer_dir() -> Path | None:
@@ -189,14 +240,10 @@ def build(*, onefile: bool, version: str, versioned: bool) -> Path:
             else:
                 print("No app.ico/app.icns/app.png found; skipping --icon.")
 
-            lib = _httpcloak_lib()
-            if lib:
-                src, dest = lib
-                sep = ";" if system == "Windows" else ":"
-                cmd += ["--add-binary", f"{src}{sep}{dest}"]
-                print(f"Bundling httpcloak binary: {src} -> {dest}")
-            else:
-                print("WARNING: could not find httpcloak native library to bundle.")
+            lib_file, bundle_source = _httpcloak_lib()
+            sep = ";" if system == "Windows" else ":"
+            cmd += ["--add-binary", f"{bundle_source}{sep}httpcloak/lib"]
+            print(f"Bundling httpcloak binary: {lib_file} -> httpcloak/lib")
 
             print("Running:", " ".join(cmd))
             subprocess.run(cmd, check=True, cwd=ROOT)
@@ -206,13 +253,19 @@ def build(*, onefile: bool, version: str, versioned: bool) -> Path:
                 parked.rename(designer)
                 print(f"Restored Qt Designer plugin: {designer.name}")
 
-    dist = ROOT / "dist" / (NAME + (".exe" if system == "Windows" else ""))
-    if onefile and versioned:
-        dist = _rename_versioned(dist, version)
-    print(f"\nBuild complete: {dist}")
+    if onefile:
+        artifact = ROOT / "dist" / (NAME + (".exe" if system == "Windows" else ""))
+        if versioned:
+            artifact = _rename_versioned(artifact, version)
+    else:
+        artifact = ROOT / "dist" / NAME
+
+    _verify_artifact(artifact)
+
+    print(f"\nBuild complete: {artifact}")
     if not onefile:
         print("Distribution folder:", ROOT / "dist")
-    return dist
+    return artifact
 
 
 def _rename_versioned(dist: Path, version: str) -> Path:
