@@ -6,4 +6,9 @@ requests>=2.31
 # dies with "Could not find httpcloak library", so upgrade deliberately and
 # re-run the bundle verifier (tools/verify_bundle.py) afterwards.
 httpcloak==1.7.3
+# Playwright is bundled into frozen builds so the Windows .exe can auto-capture
+# the Naukri session cookie after the user logs in a real browser (captcha
+# workaround). Not imported by the headless app itself — only by the login
+# helper which runs in a background thread.
+playwright>=1.40
 pypdf>=4.0

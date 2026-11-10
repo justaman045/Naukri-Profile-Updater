@@ -1,8 +1,7 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QProcess, QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,6 +21,8 @@ from src.core.naukri_client import NaukriCaptchaError, NaukriManager
 from src.core.worker import ApiWorker
 from src.ui._label_utils import make_wrapping_status_label
 
+import login_via_browser
+
 ROOT = Path(__file__).resolve().parents[2]
 
 NAUKRI_LOGIN_URL = "https://www.naukri.com/nlogin/login"
@@ -36,9 +37,7 @@ class LoginDialog(QDialog):
         self.manager: NaukriManager | None = None
         self._worker: ApiWorker | None = None
         self._browser_proc: QProcess | None = None
-        self._cookie_poll_timer: QTimer | None = None
-        self._poll_attempts = 0
-        self._max_poll_attempts = 150  # 2s * 150 = 5 minutes
+        self._browser_thread: QThread | None = None
 
         # --- Saved accounts ---
         self.account_combo = QComboBox()
@@ -213,12 +212,13 @@ class LoginDialog(QDialog):
         to ``~/.naukri-profile-update/session.json``. We then adopt that session
         and continue as if the password login had succeeded.
 
-        In frozen (packaged) builds the helper script is not bundled, so we open
-        Naukri's login page in the user's default browser and let them paste the
-        captured session token back into this dialog.
+        In source checkouts the helper is spawned as a separate process via
+        QProcess. In frozen builds it is imported and run in a background
+        QThread (PyInstaller one-file bundles do not expose a standalone
+        Python interpreter we could use with QProcess).
         """
         if getattr(sys, "frozen", False):
-            self._start_auto_cookie_capture()
+            self._start_browser_login_thread()
             return
         script = ROOT / "login_via_browser.py"
         if not script.is_file():
@@ -255,154 +255,33 @@ class LoginDialog(QDialog):
         )
         proc.start()
 
-    def _open_browser_for_manual_session(self) -> None:
-        """Frozen-build fallback: open Naukri login in the default browser and
-        ask the user to paste their session token."""
-        self.error_label.setVisible(False)
-        self.login_btn.setEnabled(False)
+    def _start_browser_login_thread(self) -> None:
+        """Frozen-build: run ``login_via_browser.main()`` in a background QThread.
 
-        # Open Naukri login page so the user can authenticate (captcha included).
-        QDesktopServices.openUrl(QUrl(NAUKRI_LOGIN_URL))
-
-        self.session_input.setVisible(True)
-        self.apply_session_btn.setVisible(True)
-        self.session_hint.setVisible(True)
-        self.session_hint.setText(
-            "Log in to Naukri in the opened browser (complete any captcha), "
-            "then copy your ``nauk_at`` cookie or Bearer token and paste it "
-            "below. The app will remember you across launches."
-        )
-        self.status_label.setText(
-            "Naukri requires a captcha — please log in in the browser, then "
-            "paste your session token below."
-        )
-        self.session_input.setFocus()
-        self.layout().activate()
-        self.adjustSize()
-
-    def _start_auto_cookie_capture(self) -> None:
-        """Frozen-build auto-capture: open Naukri login in the default browser,
-        then poll the user's Chrome/Edge/Firefox cookie database for the
-        ``nauk_at`` cookie once they log in. On success, save the session and
-        accept the dialog. On timeout, fall back to the manual paste field."""
+        Opens a Playwright-driven browser so the user can log in (captcha
+        included). On success the helper saves the session to session.json and
+        we adopt it. On failure/cancel we fall back to the manual paste field.
+        """
         self.error_label.setVisible(False)
         self.login_btn.setEnabled(False)
         self.session_input.setVisible(True)
         self.apply_session_btn.setVisible(True)
         self.session_hint.setVisible(True)
 
-        # Open Naukri login page so the user can authenticate (captcha included).
-        QDesktopServices.openUrl(QUrl(NAUKRI_LOGIN_URL))
-
-        self.session_hint.setText(
-            "Log in to Naukri in the opened browser (complete any captcha). "
-            "The app will detect your session cookie automatically. "
-            "If capture fails, paste your ``nauk_at`` cookie or Bearer token "
-            "below."
+        email = self.email.text().strip()
+        self._browser_thread = BrowserLoginThread(email=email)
+        self._browser_thread.finished.connect(
+            self._on_browser_login_thread_finished
         )
+        self._browser_thread.start()
+
         self.status_label.setText(
-            "Naukri requires a captcha — log in in the browser, "
-            "the app will capture your session automatically."
+            "Naukri requires a captcha — opening a browser. Finish logging in "
+            "there (including the captcha) and this window will continue."
         )
         self.session_input.setFocus()
         self.layout().activate()
         self.adjustSize()
-
-        self._poll_attempts = 0
-        self._cookie_poll_timer = QTimer(self)
-        self._cookie_poll_timer.timeout.connect(self._try_capture_chrome_cookie)
-        self._cookie_poll_timer.start(2000)
-
-    def _try_capture_chrome_cookie(self) -> None:
-        """Poll supported browsers for a ``nauk_at`` cookie. On first match,
-        save the session and accept the dialog."""
-        self._poll_attempts += 1
-        if self._poll_attempts > self._max_poll_attempts:
-            self._cookie_poll_timer.stop()
-            self._cookie_poll_timer = None
-            self._show_error(
-                "Automatic session capture timed out. Please paste your "
-                "session token below."
-            )
-            return
-
-        from src.core.browser_cookies import (
-            BrowserCookieError,
-            read_chromium_cookies,
-            read_firefox_cookies,
-        )
-
-        # Try Firefox first (plaintext cookies, no decryption needed),
-        # then Chrome/Edge (DPAPI decryption on Windows).
-        for source in (
-            lambda: read_firefox_cookies(),
-            lambda: read_chromium_cookies("chrome"),
-            lambda: read_chromium_cookies("edge"),
-            lambda: read_chromium_cookies("chromium"),
-        ):
-            try:
-                cookies = source()
-            except BrowserCookieError:
-                continue
-            except Exception:  # noqa: BLE001 - keep polling on any browser error
-                continue
-            token = cookies.get("nauk_at")
-            if token:
-                self._cookie_poll_timer.stop()
-                self._cookie_poll_timer = None
-                self._save_captured_session(cookies)
-                return
-
-    def _save_captured_session(self, cookies: dict[str, str]) -> None:
-        """Persist a captured session, verify it, and accept the dialog."""
-        from src.core.browser_cookies import build_session, save_session_data, verify_session
-        from src.core.credentials import ensure_credential
-
-        token = cookies.get("nauk_at", "")
-        if not token:
-            self._show_error("No session cookie was found in the browser.")
-            self.session_input.setFocus()
-            return
-
-        # Verify against Naukri before saving so a dead token is not stored.
-        ok, message = verify_session(cookies)
-        if not ok:
-            self._show_error(
-                f"Captured session is not valid: {message}\n"
-                "Please log in again in the browser or paste a fresh token."
-            )
-            self.session_input.setFocus()
-            return
-
-        try:
-            data = build_session(cookies, self.email.text().strip())
-            save_session_data(data)
-
-            if self.email.text().strip():
-                try:
-                    ensure_credential(self.email.text().strip())
-                except OSError:
-                    pass
-
-            manager = NaukriManager(
-                data.username or self.email.text().strip(),
-                "",
-                use_saved_session=True,
-                session_data=data,
-            )
-            if manager.has_saved_session:
-                self.manager = manager
-                self.accept()
-                return
-            self._show_error("Saved session could not be validated.")
-        except Exception as exc:  # noqa: BLE001 - surface save/parse errors
-            self._show_error(f"Failed to save session: {exc}")
-        finally:
-            self.session_input.setVisible(True)
-            self.apply_session_btn.setVisible(True)
-            self.session_input.setFocus()
-            self.layout().activate()
-            self.adjustSize()
 
     def _parse_session_token(self, raw: str) -> tuple[str, dict[str, str]]:
         """Parse a session token pasted by the user.
@@ -471,9 +350,8 @@ class LoginDialog(QDialog):
                 session_data=data,
             )
             if manager.has_saved_session:
-                if self._cookie_poll_timer is not None:
-                    self._cookie_poll_timer.stop()
-                    self._cookie_poll_timer = None
+                if self._browser_thread is not None:
+                    self._browser_thread = None
                 self.manager = manager
                 self.accept()
                 return
@@ -483,6 +361,37 @@ class LoginDialog(QDialog):
         finally:
             self.login_btn.setEnabled(True)
             self.apply_session_btn.setEnabled(True)
+
+    def _on_browser_login_thread_finished(self, exit_code: int) -> None:
+        """Handle completion of the frozen-build browser login thread.
+
+        On exit code 0, adopt the saved session and accept the dialog.
+        On any other exit code, show an error and keep the paste field.
+        """
+        self._browser_thread = None
+        self.login_btn.setEnabled(True)
+
+        if exit_code == 0:
+            data = session_store.load_session()
+            if data and data.bearer_token:
+                manager = NaukriManager(
+                    data.username or self.email.text().strip(),
+                    "",
+                    use_saved_session=True,
+                )
+                if manager.has_saved_session:
+                    self.manager = manager
+                    self.accept()
+                    return
+            self._show_error(
+                "Browser login finished, but no saved Naukri session was found."
+            )
+            return
+
+        self._show_error(
+            "Browser login failed or was cancelled. Paste your session token "
+            "below to continue."
+        )
 
     def _on_browser_login_finished(self, exit_code: int, status) -> None:
         proc = self._browser_proc
@@ -543,9 +452,8 @@ class LoginDialog(QDialog):
 
     def reject(self) -> None:
         self._stop_browser_login()
-        if self._cookie_poll_timer is not None:
-            self._cookie_poll_timer.stop()
-            self._cookie_poll_timer = None
+        if self._browser_thread is not None:
+            self._browser_thread = None
         super().reject()
 
     def _show_error(self, msg: str) -> None:
@@ -555,3 +463,43 @@ class LoginDialog(QDialog):
         # captcha/cookie helper hint) would otherwise be clipped at the bottom.
         self.layout().activate()
         self.adjustSize()
+
+
+class BrowserLoginThread(QThread):
+    """Runs ``login_via_browser.main()`` in a background thread (frozen builds).
+
+    PyInstaller one-file bundles do not expose a standalone Python interpreter
+    we could use with QProcess, so the helper is imported and executed
+    in-process. The thread emits ``finished`` with the helper's exit code.
+    """
+
+    finished = Signal(int)
+
+    def __init__(self, email: str = ""):
+        super().__init__()
+        self.email = email
+        self._exit_code = 1
+
+    def run(self):
+        try:
+            import os
+            import sys
+
+            # In a frozen build, Playwright's Chromium browser is bundled at
+            # _MEIPASS/playwright-browsers. Point Playwright at it so it can
+            # launch the browser without relying on the user's machine.
+            if getattr(sys, "frozen", False):
+                meipass = getattr(sys, "_MEIPASS", None)
+                if meipass:
+                    bundled_browsers = Path(meipass) / "playwright-browsers"
+                    if bundled_browsers.is_dir():
+                        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled_browsers)
+
+            self._exit_code = login_via_browser.main(
+                ["--channel", "chrome", "--verify", "-e", self.email]
+            )
+        except SystemExit as exc:  # helper calls sys.exit() on error/cancel
+            self._exit_code = exc.code if isinstance(exc.code, int) else 1
+        except Exception:  # noqa: BLE001 - any failure falls back to paste field
+            self._exit_code = 1
+        self.finished.emit(self._exit_code)

@@ -2,8 +2,9 @@
 # The app itself stays headless; these are only for the login helpers.
 
 # login_via_browser.py: drive a real browser once to get past Naukri's captcha.
+# Playwright is now a runtime dependency (see requirements.txt) so frozen
+# builds can auto-capture the Naukri session cookie.
 # Also run: python -m playwright install chromium
-playwright>=1.40
 
 # inject_session.py --from-browser chrome|chromium|brave|edge|vivaldi on Linux:
 # decrypt the Chromium cookie database. Without these, use --from-json instead.

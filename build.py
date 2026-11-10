@@ -97,7 +97,40 @@ def _version_info(path: Path, version: str) -> None:
     )
 
 
-def _httpcloak_lib() -> tuple[Path, Path]:
+def _playwright_browser() -> tuple[Path, Path] | None:
+    """Locate Playwright's Chromium browser binary for bundling.
+
+    PyInstaller's ``--collect-all playwright`` collects the Python package but
+    not the downloaded Chromium executable (which lives in the ms-playwright
+    cache). Without it, Playwright cannot launch a browser in the frozen app,
+    so auto-capture of the Naukri session cookie would fail.
+
+    Returns ``(browser_dir, bundle_source)`` where ``browser_dir`` is the
+    directory containing the Chromium executable, or None when not found.
+    """
+    import os
+
+    browsers_root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", Path.home() / ".cache" / "ms-playwright"))
+    if not browsers_root.is_dir():
+        return None
+
+    # Look for a Chromium installation.
+    for candidate in sorted(browsers_root.iterdir()):
+        if not candidate.is_dir():
+            continue
+        if not candidate.name.startswith("chromium"):
+            continue
+        # Find the chrome executable inside.
+        for exec_name in ("chrome", "chrome.exe", "Chromium.app"):
+            exec_path = candidate / exec_name
+            if exec_path.is_file():
+                return candidate, candidate
+        # macOS app bundle.
+        app_bundle = candidate / "chrome-mac" / "Chromium.app"
+        if app_bundle.is_dir():
+            return app_bundle, app_bundle
+
+    return None
     """Locate httpcloak's native shared library.
 
     Returns ``(lib_file, bundle_source)``:
@@ -200,6 +233,9 @@ def build(*, onefile: bool, version: str, versioned: bool) -> Path:
         # the officially recommended PySide6 bundling.
         "--collect-all", "PySide6",
         "--collect-all", "shiboken6",
+        # Playwright (python package) is needed by login_via_browser.py which
+        # the frozen build runs to auto-capture the Naukri session cookie.
+        "--collect-all", "playwright",
         str(ENTRY),
     ]
     if onefile:
@@ -244,6 +280,25 @@ def build(*, onefile: bool, version: str, versioned: bool) -> Path:
             sep = ";" if system == "Windows" else ":"
             cmd += ["--add-binary", f"{bundle_source}{sep}httpcloak/lib"]
             print(f"Bundling httpcloak binary: {lib_file} -> httpcloak/lib")
+
+            # Bundle Playwright's Chromium browser so frozen builds can launch
+            # a real browser to auto-capture the Naukri session cookie.
+            browser = _playwright_browser()
+            if browser is not None:
+                browser_dir, bundle_source = browser
+                cmd += ["--add-data", f"{bundle_source}{sep}playwright-browsers"]
+                print(f"Bundling Playwright browser: {browser_dir} -> playwright-browsers")
+            else:
+                print("WARNING: Playwright Chromium browser not found. "
+                      "Auto-capture in frozen builds will fail unless the "
+                      "browser is available on the target machine.")
+
+            # Bundle the browser-login helper so frozen builds can auto-capture
+            # the Naukri session cookie. It is referenced at runtime from
+            # _MEIPASS (frozen) or ROOT (source checkout).
+            login_helper = ROOT / "login_via_browser.py"
+            cmd += ["--add-data", f"{login_helper}{sep}."]
+            print(f"Bundling login helper: {login_helper}")
 
             print("Running:", " ".join(cmd))
             subprocess.run(cmd, check=True, cwd=ROOT)

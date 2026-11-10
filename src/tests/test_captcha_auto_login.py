@@ -50,6 +50,19 @@ def _spin_until_done(dlg: ld.LoginDialog, ms: int = 20000) -> None:
     loop.exec()
 
 
+def _spin_until_thread_done(dlg: ld.LoginDialog, ms: int = 20000) -> None:
+    """Spin the Qt event loop until the browser login thread exits."""
+    loop = QEventLoop()
+    poll = QTimer()
+    poll.timeout.connect(lambda: dlg._browser_thread is None and loop.quit())
+    poll.start(50)
+    hard = QTimer()
+    hard.setSingleShot(True)
+    hard.timeout.connect(loop.quit)
+    hard.start(ms)
+    loop.exec()
+
+
 def _restore():
     ld.ROOT = ORIG_ROOT
     session_store.SESSION_FILE = ORIG_SESSION_FILE
@@ -209,9 +222,9 @@ def test_decrypt_chromium_windows_dpapi():
         del ctypes.windll
 
 
-def test_frozen_auto_capture_adopts_session(tmp_path):
-    """Frozen build: when a browser cookie DB yields nauk_at, the dialog
-    verifies, saves, and accepts without the manual paste field."""
+def test_frozen_browser_login_thread_adopts_session(tmp_path):
+    """Frozen build: when login_via_browser.main() succeeds, the dialog
+    adopts the saved session and accepts without the manual paste field."""
     sess = tmp_path / "session.json"
     session_store.SESSION_FILE = sess
 
@@ -226,34 +239,24 @@ def test_frozen_auto_capture_adopts_session(tmp_path):
         dlg.show()
         app.processEvents()
 
-        # Trigger the frozen-build auto-capture path.
-        dlg._start_auto_cookie_capture()
-        app.processEvents()
+        # Pre-create a valid session so the thread's adoption path can find it.
+        sess.write_text(
+            json.dumps(
+                {
+                    "username": "user@example.com",
+                    "bearer_token": "fake-token-123",
+                    "cookies": {"nauk_at": "fake-token-123"},
+                }
+            )
+        )
 
-        # Mock browser_cookies to return a nauk_at cookie on first poll.
-        fake_cookies = {"nauk_at": "fake-token-123", "other": "value"}
-
+        # Mock login_via_browser.main() to return 0 (success).
         with patch(
-            "src.core.browser_cookies.read_firefox_cookies",
-            return_value={},
-        ), patch(
-            "src.core.browser_cookies.read_chromium_cookies",
-            return_value=fake_cookies,
-        ), patch(
-            "src.core.browser_cookies.verify_session",
-            return_value=(True, "session is valid (profile reachable)"),
-        ), patch(
-            "src.core.browser_cookies.build_session",
-            return_value=session_store.SessionData(
-                username="user@example.com",
-                bearer_token="fake-token-123",
-                cookies=fake_cookies,
-            ),
-        ), patch(
-            "src.core.credentials.ensure_credential",
+            "src.ui.login_dialog.login_via_browser.main",
+            return_value=0,
         ):
-            dlg._try_capture_chrome_cookie()
-            app.processEvents()
+            dlg._start_browser_login_thread()
+            _spin_until_thread_done(dlg)
 
         assert dlg.result() == QDialog.DialogCode.Accepted
         assert dlg.manager is not None
@@ -268,9 +271,9 @@ def test_frozen_auto_capture_adopts_session(tmp_path):
         session_store.SESSION_FILE = session_store.APP_DIR / "session.json"
 
 
-def test_frozen_auto_capture_timeout_shows_error(tmp_path):
-    """Frozen build: when no browser cookie yields nauk_at before the poll
-    limit, the dialog shows a timeout error and keeps the paste field."""
+def test_frozen_browser_login_thread_failure_shows_error(tmp_path):
+    """Frozen build: when login_via_browser.main() fails, the dialog shows
+    an error and keeps the paste field."""
     ld.ROOT = tmp_path
     orig_frozen = getattr(sys, "frozen", False)
     try:
@@ -281,24 +284,16 @@ def test_frozen_auto_capture_timeout_shows_error(tmp_path):
         dlg.show()
         app.processEvents()
 
-        dlg._start_auto_cookie_capture()
-        app.processEvents()
-
-        # No browser ever yields nauk_at.
+        # Mock login_via_browser.main() to return 1 (failure).
         with patch(
-            "src.core.browser_cookies.read_firefox_cookies",
-            return_value={},
-        ), patch(
-            "src.core.browser_cookies.read_chromium_cookies",
-            return_value={},
+            "src.ui.login_dialog.login_via_browser.main",
+            return_value=1,
         ):
-            dlg._max_poll_attempts = 0  # Force timeout on first poll.
-            dlg._poll_attempts = 0
-            dlg._try_capture_chrome_cookie()
-            app.processEvents()
+            dlg._start_browser_login_thread()
+            _spin_until_thread_done(dlg)
 
         assert dlg.result() != QDialog.DialogCode.Accepted
-        assert "timed out" in dlg.error_label.text()
+        assert "failed or was cancelled" in dlg.error_label.text()
         assert dlg.session_input.isVisible()
     finally:
         sys.frozen = orig_frozen
@@ -350,8 +345,8 @@ def main() -> int:
         ("test_parse_session_token_bearer", test_parse_session_token_bearer),
         ("test_parse_session_token_empty", test_parse_session_token_empty),
         ("test_decrypt_chromium_windows_dpapi", test_decrypt_chromium_windows_dpapi),
-        ("test_frozen_auto_capture_adopts_session", lambda: test_frozen_auto_capture_adopts_session(tmp)),
-        ("test_frozen_auto_capture_timeout_shows_error", lambda: test_frozen_auto_capture_timeout_shows_error(tmp)),
+        ("test_frozen_browser_login_thread_adopts_session", lambda: test_frozen_browser_login_thread_adopts_session(tmp)),
+        ("test_frozen_browser_login_thread_failure_shows_error", lambda: test_frozen_browser_login_thread_failure_shows_error(tmp)),
         ("test_captcha_auto_login_adopts_session", lambda: test_captcha_auto_login_adopts_session(tmp)),
         ("test_apply_session_accepts_dialog", lambda: test_apply_session_accepts_dialog(tmp)),
         ("test_captcha_broken_helper_shows_error", lambda: test_captcha_broken_helper_shows_error(tmp)),
