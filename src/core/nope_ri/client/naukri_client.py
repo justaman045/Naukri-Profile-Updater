@@ -512,17 +512,30 @@ class NaukriLoginClient:
         if not self.naukri_session:
             raise NaukriAuthError("Login first")
 
-        # Check formKey expiry before using it. Naukri's formKey is a JWT
-        # with a 1h TTL; an expired token causes filevalidation to return
-        # 404 "OCS Service". Check exp first per AGENTS.md contract.
-        form_key = self.get_form_key2()
-        if _is_form_key_expired(form_key):
-            logger.debug("validate_file: formKey expired, re-scraping")
-            self.cache.pop("form_key", None)
+        # Get a formKey. Naukri's formKey is a JWT with a 1h TTL; an expired
+        # token causes filevalidation to return 404 "OCS Service". Check exp
+        # first per AGENTS.md contract. If the scrape itself fails (e.g. the
+        # profile HTML returned a login page because the session expired),
+        # clear the cache and try once more.
+        form_key = None
+        for attempt in range(2):
             try:
                 form_key = self.get_form_key2()
+                if form_key and not _is_form_key_expired(form_key):
+                    break
+                # Key is expired or missing — invalidate and retry scrape.
+                self.cache.pop("form_key", None)
             except NaukriParseError:
-                pass  # Use the (possibly expired) key; server will reject
+                self.cache.clear()
+                if attempt == 0:
+                    continue
+                raise
+            if attempt == 0:
+                continue
+            break
+
+        if not form_key:
+            raise NaukriParseError("Could not scrape a valid formKey from Naukri's JS bundles")
 
         file_key = "U" + self.generate_file_key(13)
 
@@ -541,22 +554,25 @@ class NaukriLoginClient:
         res = self._validate_file_request(filename, file_bytes, form_key, file_key)
 
         if not res.ok:
-            # Clear ALL cached state and do a complete re-scrape. A 404
-            # "OCS Service" means the formKey/fileKey pair is wrong — the
-            # cached key may be fundamentally invalid, not just expired.
+            # A 404 "OCS Service" means the formKey/fileKey pair is wrong.
+            # Clear ALL cached state, generate a brand-new fileKey, re-scrape
+            # the formKey, and retry once.
             self.cache.clear()
             try:
                 fresh_key = self.get_form_key2()
             except NaukriParseError:
                 fresh_key = None
             if fresh_key and fresh_key != form_key:
+                fresh_file_key = "U" + self.generate_file_key(13)
                 logger.debug(
-                    "validate_file: retrying with fresh formKey=%s", fresh_key
+                    "validate_file: retrying with fresh formKey=%s fileKey=%s",
+                    fresh_key, fresh_file_key,
                 )
                 res = self._validate_file_request(
-                    filename, file_bytes, fresh_key, file_key
+                    filename, file_bytes, fresh_key, fresh_file_key
                 )
                 form_key = fresh_key
+                file_key = fresh_file_key
 
             if not res.ok:
                 body = ""
