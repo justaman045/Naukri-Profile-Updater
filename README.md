@@ -12,12 +12,12 @@ triggers an automated build of all platforms — grab the latest from the
 
 | Platform            | Architecture    | File asset / download                                            |
 |---------------------|-----------------|------------------------------------------------------------------|
-| Windows             | x86_64          | [NaukriProfileManager-0.6.0-windows-x86_64.exe](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.6.0/NaukriProfileManager-0.6.0-windows-x86_64.exe) · [one-folder zip](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.6.0/NaukriProfileManager-0.6.0-windows-x86_64-ondir.zip) |
-| Linux               | x86_64          | [NaukriProfileManager-0.6.0-linux-x86_64.zip](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.6.0/NaukriProfileManager-0.6.0-linux-x86_64.zip) · [raw binary](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.6.0/NaukriProfileManager-0.6.0-linux-x86_64) |
-| macOS (Intel)       | x86_64          | [NaukriProfileManager-0.6.0-macos-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.6.0/NaukriProfileManager-0.6.0-macos-x86_64) |
-| macOS (Apple Silicon) | arm64         | [NaukriProfileManager-0.6.0-macos-arm64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.6.0/NaukriProfileManager-0.6.0-macos-arm64) |
+| Windows             | x86_64          | [NaukriProfileManager-0.7.0-windows-x86_64.exe](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.7.0/NaukriProfileManager-0.7.0-windows-x86_64.exe) · [one-folder zip](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.7.0/NaukriProfileManager-0.7.0-windows-x86_64-ondir.zip) |
+| Linux               | x86_64          | [NaukriProfileManager-0.7.0-linux-x86_64.zip](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.7.0/NaukriProfileManager-0.7.0-linux-x86_64.zip) · [raw binary](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.7.0/NaukriProfileManager-0.7.0-linux-x86_64) |
+| macOS (Intel)       | x86_64          | [NaukriProfileManager-0.7.0-macos-x86_64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.7.0/NaukriProfileManager-0.7.0-macos-x86_64) |
+| macOS (Apple Silicon) | arm64         | [NaukriProfileManager-0.7.0-macos-arm64](https://github.com/justaman045/Naukri-Profile-Updater/releases/download/v0.7.0/NaukriProfileManager-0.7.0-macos-arm64) |
 
-> The links above point at the current `v0.6.0` release. After each new tag, the
+> The links above point at the current `v0.7.0` release. After each new tag, the
 > [Releases page](https://github.com/justaman045/Naukri-Profile-Updater/releases/latest)
 > always carries the newest per-OS executables.
 >
@@ -28,7 +28,7 @@ triggers an automated build of all platforms — grab the latest from the
 >
 > **Linux:** if your browser stalls on the download, use the terminal instead —
 > `gh release download --repo justaman045/Naukri-Profile-Updater --pattern '*-linux-*'`
-> or `curl -LO https://github.com/justaman045/Naukri-Profile-Updater/releases/latest/download/NaukriProfileManager-0.6.0-linux-x86_64.zip`.
+> or `curl -LO https://github.com/justaman045/Naukri-Profile-Updater/releases/latest/download/NaukriProfileManager-0.7.0-linux-x86_64.zip`.
 > Then `unzip`, `chmod +x NaukriProfileManager-*-linux-x86_64`, and run it.
 >
 > Builds are **unsigned** — Windows SmartScreen and macOS Gatekeeper may warn before
@@ -114,8 +114,8 @@ On first run, enter your Naukri email + password. Your session is saved to
 pip install pyinstaller
 python build.py                          # onedir (folder) — recommended locally
 python build.py --onefile                # single executable (slower startup)
-python build.py --onefile --versioned --version v0.6.0
-                                         # -> NaukriProfileManager-0.6.0-<os>-<arch>
+python build.py --onefile --versioned --version v0.7.0
+                                         # -> NaukriProfileManager-0.7.0-<os>-<arch>
 ```
 
 **PyInstaller does not cross-compile.** Build Linux on Linux, Windows on Windows, and macOS
@@ -131,7 +131,7 @@ directory httpcloak searches at runtime — and then **verifies the artifact it
 just produced**:
 
 ```bash
-python tools/verify_bundle.py dist/NaukriProfileManager-0.6.0-linux-x86_64
+python tools/verify_bundle.py dist/NaukriProfileManager-0.7.0-linux-x86_64
 ```
 
 The check confirms the native library is present *and* that every dependency
