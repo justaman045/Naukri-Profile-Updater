@@ -272,6 +272,60 @@ def _resolve_chromium_path(browser: str, profile: str | Path | None) -> Path:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+def _decrypt_chromium_windows(encrypted: bytes) -> str:
+    """Decrypt a Chrome v10/v11 cookie value on Windows using DPAPI.
+
+    Chrome on Windows encrypts cookie values with ``CryptProtectData``. The
+    first 3 bytes are the ``v10``/``v11`` prefix; the rest is the DPAPI blob.
+    ``CryptUnprotectData`` decrypts it for the current user without any extra
+    Python packages. Returns ``""`` when decryption fails or the value is not
+    v10/v11.
+    """
+    if len(encrypted) < 4 or encrypted[:3] not in (b"v10", b"v11"):
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        crypt32 = ctypes.windll.crypt32
+        kernel32 = ctypes.windll.kernel32
+
+        class DATA_BLOB(ctypes.Structure):
+            _fields_ = [
+                ("cbData", wintypes.DWORD),
+                ("pbData", ctypes.POINTER(ctypes.c_byte)),
+            ]
+
+        raw = encrypted[3:]
+        data_in = DATA_BLOB()
+        data_in.cbData = len(raw)
+        data_in.pbData = (ctypes.c_byte * len(raw)).from_buffer_copy(raw)
+
+        data_out = DATA_BLOB()
+        desc = ctypes.c_wchar_p()
+
+        if not crypt32.CryptUnprotectData(
+            ctypes.byref(data_in),
+            ctypes.byref(desc),
+            None,
+            None,
+            None,
+            0,
+            ctypes.byref(data_out),
+        ):
+            return ""
+
+        try:
+            result = ctypes.string_at(
+                data_out.pbData, data_out.cbData
+            ).decode("utf-8", "replace")
+        finally:
+            kernel32.LocalFree(data_out.pbData)
+        return result
+    except Exception:  # noqa: BLE001 - DPAPI is best effort on Windows
+        return ""
+
+
 def read_chromium_cookies(
     browser: str,
     profile: str | Path | None = None,
@@ -279,10 +333,12 @@ def read_chromium_cookies(
 ) -> dict[str, str]:
     """Return Naukri cookies from a Chromium-family browser.
 
-    Linux only for encrypted values: Chrome derives the AES key from
-    ``Chrome Safe Storage`` in Secret Service, or from ``"peanuts"`` when it runs
-    with ``--password-store=basic``. macOS (Keychain) and Windows (DPAPI /
-    app-bound ``v20``) are not supported — use ``--from-json`` there.
+    Linux: encrypted values are decrypted with the key from Secret Service or
+    ``"peanuts"`` (see :func:`_decrypt_chromium_value`).
+    Windows: v10/v11 values are decrypted with DPAPI (see
+    :func:`_decrypt_chromium_windows`). v20+ (app-bound encryption) is not
+    decryptable here — export cookies as JSON and use ``--from-json`` instead.
+    macOS (Keychain) is not supported — use ``--from-json`` there.
     """
     if browser not in _CHROMIUM_KEYRING_LABELS:
         raise BrowserCookieError(f"unsupported browser: {browser}")
@@ -302,7 +358,8 @@ def read_chromium_cookies(
             f"could not read {browser} cookies at {path}: {exc}"
         ) from exc
 
-    passwords = _candidate_passwords(browser, password_store)
+    use_windows = sys.platform.startswith("win")
+    passwords = [] if use_windows else _candidate_passwords(browser, password_store)
     cookies: dict[str, str] = {}
     chosen: bytes | None = None
 
@@ -314,7 +371,10 @@ def read_chromium_cookies(
             continue
         if not encrypted:
             continue
-        if chosen is None:
+        decrypted = ""
+        if use_windows:
+            decrypted = _decrypt_chromium_windows(encrypted)
+        elif chosen is None:
             for password in passwords:
                 try:
                     candidate = _decrypt_chromium_value(encrypted, host, password)
@@ -324,7 +384,7 @@ def read_chromium_cookies(
                     continue
                 if _looks_text(candidate):
                     chosen = password
-                    cookies[str(name)] = candidate
+                    decrypted = candidate
                     break
             if chosen is None:
                 raise BrowserCookieError(
@@ -335,9 +395,11 @@ def read_chromium_cookies(
                 )
         else:
             try:
-                cookies[str(name)] = _decrypt_chromium_value(encrypted, host, chosen)
+                decrypted = _decrypt_chromium_value(encrypted, host, chosen)
             except Exception:
                 continue
+        if decrypted:
+            cookies[str(name)] = decrypted
 
     return {name: value for name, value in cookies.items() if value}
 
