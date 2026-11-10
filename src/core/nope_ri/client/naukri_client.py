@@ -2,6 +2,8 @@ import logging
 import random
 import re
 import time
+import base64
+import json
 import functools
 from io import BytesIO
 from .session import build_session
@@ -30,6 +32,26 @@ def _body_snippet(res, limit: int = 200) -> str:
     except Exception:  # noqa: BLE001 - diagnostics must not mask the real error
         return ""
     return " ".join(text.split())[:limit]
+
+
+def _is_form_key_expired(form_key: str) -> bool:
+    """Check if a formKey JWT token has expired.
+
+    Naukri's formKey is a JWT with a 1h TTL. If ``exp`` has passed,
+    filevalidation returns 404 "OCS Service". Returns True when the token
+    is expired or cannot be parsed (caller should re-scrape).
+    """
+    try:
+        parts = form_key.split(".")
+        if len(parts) != 3:
+            return False
+        payload = parts[1]
+        payload += "=" * (4 - len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload))
+        exp = data.get("exp", 0)
+        return exp < time.time()
+    except Exception:  # noqa: BLE001 - can't parse, assume not expired
+        return False
 
 
 # ------------------------------------------------------------------
@@ -490,7 +512,18 @@ class NaukriLoginClient:
         if not self.naukri_session:
             raise NaukriAuthError("Login first")
 
+        # Check formKey expiry before using it. Naukri's formKey is a JWT
+        # with a 1h TTL; an expired token causes filevalidation to return
+        # 404 "OCS Service". Check exp first per AGENTS.md contract.
         form_key = self.get_form_key2()
+        if _is_form_key_expired(form_key):
+            logger.debug("validate_file: formKey expired, re-scraping")
+            self.cache.pop("form_key", None)
+            try:
+                form_key = self.get_form_key2()
+            except NaukriParseError:
+                pass  # Use the (possibly expired) key; server will reject
+
         file_key = "U" + self.generate_file_key(13)
 
         if isinstance(file, str):
@@ -508,10 +541,10 @@ class NaukriLoginClient:
         res = self._validate_file_request(filename, file_bytes, form_key, file_key)
 
         if not res.ok:
-            # A stale or wrong formKey (1h TTL, or scraped from the wrong
-            # bundle) is the most common cause of a validation rejection.
-            # Invalidate the cache, re-scrape a fresh key, and retry once.
-            self.cache.pop("form_key", None)
+            # Clear ALL cached state and do a complete re-scrape. A 404
+            # "OCS Service" means the formKey/fileKey pair is wrong — the
+            # cached key may be fundamentally invalid, not just expired.
+            self.cache.clear()
             try:
                 fresh_key = self.get_form_key2()
             except NaukriParseError:
