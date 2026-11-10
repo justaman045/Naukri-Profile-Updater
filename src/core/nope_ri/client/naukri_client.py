@@ -504,15 +504,29 @@ class NaukriLoginClient:
         res = self._validate_file_request(filename, file_bytes, form_key, file_key)
 
         if not res.ok:
-            logger.debug(
-                "file validation rejected (%s) content-type=%s body=%s",
-                res.status_code,
-                getattr(res.request, "headers", {}).get("Content-Type", "unknown")
-                if hasattr(res, "request")
-                else "unknown",
-                _body_snippet(res),
-            )
-            raise NaukriUploadError("File validation failed")
+            # A stale/cached formKey (1h TTL) is the most common cause of a
+            # validation rejection. Invalidate it, re-scrape a fresh key, and
+            # retry once instead of failing immediately.
+            self.cache.pop("form_key", None)
+            try:
+                fresh_key = self.get_form_key2()
+            except NaukriParseError:
+                fresh_key = None
+            if fresh_key and fresh_key != form_key:
+                res = self._validate_file_request(
+                    filename, file_bytes, fresh_key, file_key
+                )
+                form_key = fresh_key
+
+            if not res.ok:
+                logger.debug(
+                    "file validation rejected (%s) body=%s",
+                    res.status_code,
+                    _body_snippet(res),
+                )
+                raise NaukriUploadError(
+                    f"File validation failed (HTTP {res.status_code})"
+                )
 
         try:
             resp_json = res.json()
