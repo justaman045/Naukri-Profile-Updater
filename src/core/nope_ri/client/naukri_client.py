@@ -501,31 +501,42 @@ class NaukriLoginClient:
             file_bytes = file.read()
             filename = getattr(file, "name", "resume.pdf")
 
+        logger.debug(
+            "validate_file: formKey=%s fileKey=%s filename=%s size=%d",
+            form_key, file_key, filename, len(file_bytes),
+        )
         res = self._validate_file_request(filename, file_bytes, form_key, file_key)
 
         if not res.ok:
-            # A stale/cached formKey (1h TTL) is the most common cause of a
-            # validation rejection. Invalidate it, re-scrape a fresh key, and
-            # retry once instead of failing immediately.
+            # A stale or wrong formKey (1h TTL, or scraped from the wrong
+            # bundle) is the most common cause of a validation rejection.
+            # Invalidate the cache, re-scrape a fresh key, and retry once.
             self.cache.pop("form_key", None)
             try:
                 fresh_key = self.get_form_key2()
             except NaukriParseError:
                 fresh_key = None
             if fresh_key and fresh_key != form_key:
+                logger.debug(
+                    "validate_file: retrying with fresh formKey=%s", fresh_key
+                )
                 res = self._validate_file_request(
                     filename, file_bytes, fresh_key, file_key
                 )
                 form_key = fresh_key
 
             if not res.ok:
+                body = ""
+                try:
+                    body = res.text[:500]
+                except Exception:
+                    pass
                 logger.debug(
-                    "file validation rejected (%s) body=%s",
-                    res.status_code,
-                    _body_snippet(res),
+                    "validate_file rejected (%s) formKey=%s fileKey=%s body=%s",
+                    res.status_code, form_key, file_key, body,
                 )
                 raise NaukriUploadError(
-                    f"File validation failed (HTTP {res.status_code})"
+                    f"File validation failed (HTTP {res.status_code}): {body[:200]}"
                 )
 
         try:
