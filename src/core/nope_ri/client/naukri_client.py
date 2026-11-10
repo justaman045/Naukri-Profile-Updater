@@ -507,7 +507,9 @@ class NaukriLoginClient:
             logger.debug(
                 "file validation rejected (%s) content-type=%s body=%s",
                 res.status_code,
-                res.request.headers.get("Content-Type"),
+                getattr(res.request, "headers", {}).get("Content-Type", "unknown")
+                if hasattr(res, "request")
+                else "unknown",
                 _body_snippet(res),
             )
             raise NaukriUploadError("File validation failed")
