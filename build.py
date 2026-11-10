@@ -121,7 +121,7 @@ def _playwright_browser() -> tuple[Path, Path] | None:
         if not candidate.name.startswith("chromium"):
             continue
         # Find the chrome executable inside.
-        for exec_name in ("chrome", "chrome.exe", "Chromium.app"):
+        for exec_name in ("chrome", "chrome.exe", "Chromium"):
             exec_path = candidate / exec_name
             if exec_path.is_file():
                 return candidate, candidate
@@ -131,6 +131,9 @@ def _playwright_browser() -> tuple[Path, Path] | None:
             return app_bundle, app_bundle
 
     return None
+
+
+def _httpcloak_lib() -> tuple[Path, Path]:
     """Locate httpcloak's native shared library.
 
     Returns ``(lib_file, bundle_source)``:

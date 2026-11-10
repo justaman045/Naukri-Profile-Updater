@@ -46,6 +46,11 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pyinstaller
 
+      # Install the Playwright Chromium browser so build.py can bundle it into
+      # the frozen executable for the captcha auto-login flow.
+      - name: Install Playwright browser
+        run: python -m playwright install chromium
+
       # Minor bump of the version in pyproject.toml (0.1.0 -> 0.2.0). All four
       # runners check out the same HEAD, so they compute the same version and the
       # artifact names line up for the release job.
