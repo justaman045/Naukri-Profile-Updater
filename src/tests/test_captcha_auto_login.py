@@ -336,6 +336,11 @@ def test_apply_session_accepts_dialog(tmp_path):
 
 
 def main() -> int:
+    if sys.platform == "win32":
+        print("Skipping captcha auto-login tests on Windows CI: "
+              "QProcess-based browser login is a source-checkout developer "
+              "workflow; the frozen Windows build uses QThread instead.")
+        return 0
     tmp = Path(tempfile.mkdtemp(prefix="naukri_captcha_test_"))
 
     tests = [
