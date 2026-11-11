@@ -68,6 +68,10 @@ jobs:
       # Smoke tests (plain scripts, no pytest). Run before building so a
       # regression in native-lib resolution or the captcha login flow breaks
       # CI instead of a release.
+      - name: Install PySide6 system deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: sudo apt-get update -y && sudo apt-get install -y libfontconfig1 libfreetype6 libx11-6 libxcb1
       - name: Run smoke tests
         env:
           QT_QPA_PLATFORM: offscreen
