@@ -51,6 +51,15 @@ jobs:
       - name: Install Playwright browser
         run: python -m playwright install chromium
 
+      # Install MinGW on Windows so httpcloak's companion DLL (libwinpthread-1.dll)
+      # is available for build.py::_ensure_companion_dlls() and native library
+      # loading. The httpcloak wheel ships libgcc_s_seh-1.dll but not
+      # libwinpthread-1.dll, so a clean Windows runner fails to load the library.
+      - name: Install MinGW (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: choco install mingw -y
+
       # Fail fast if httpcloak's native library (and its companions) cannot load
       # on this runner - otherwise the build would ship a broken executable.
       - name: Verify httpcloak native library loads
