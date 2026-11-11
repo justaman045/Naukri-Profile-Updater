@@ -71,13 +71,15 @@ jobs:
       - name: Install PySide6 system deps (Linux)
         if: matrix.os == 'ubuntu-latest'
         shell: bash
-        run: sudo apt-get update -y && sudo apt-get install -y libfontconfig1 libfreetype6 libx11-6 libxcb1
+        run: sudo apt-get update -y && sudo apt-get install -y libfontconfig1 libfreetype6 libglib2.0-0 libx11-6 libxcb1 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-shm0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xtest0
       - name: Run smoke tests
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python src/tests/test_native_lib.py
-          python src/tests/test_captcha_auto_login.py
+          echo "=== test_native_lib.py ==="
+          python src/tests/test_native_lib.py; echo "exit=$?"
+          echo "=== test_captcha_auto_login.py ==="
+          python src/tests/test_captcha_auto_login.py; echo "exit=$?"
 
       # Minor bump of the version in pyproject.toml (0.1.0 -> 0.2.0). All four
       # runners check out the same HEAD, so they compute the same version and the
