@@ -4,21 +4,24 @@ Cross-platform (Windows/macOS/Linux) PySide6 desktop app for viewing/updating a 
 
 ## Commands
 
-- Install: `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`. Must run inside the venv — `src/main.py` hard-exits unless `VIRTUAL_ENV` is set (frozen exe exempt).
+- Install: `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`. Must run inside a venv — `src/main.py` refuses otherwise (frozen exe exempt). Any activated venv counts, not just `VIRTUAL_ENV`.
 - Run: `python src/main.py` (or `pip install -e . && naukri-profile-update`).
-- The only real check — no test/lint/typecheck tooling is configured, don't invent commands:
+- Verify (the only check — no pytest/ruff/mypy configured, don't invent them):
   `QT_QPA_PLATFORM=offscreen python -c "from src.ui.main_window import MainWindow"`
-- Build: `python build.py` (onedir), `--onefile`, `--versioned` (implies `--onefile`). `--version X` rewrites `_FALLBACK_VERSION` in `src/core/version.py` — check `git status` afterwards.
-- `--versioned --version X` renames the onefile artifact to `NaukriProfileManager-<X>-<os>-<arch>`.
-- Every build runs `tools/verify_bundle.py` on the artifact and fails if it fails (CI runs it again as its own step).
-- Tests (plain scripts, no pytest): `QT_QPA_PLATFORM=offscreen python src/tests/test_captcha_auto_login.py` and `QT_QPA_PLATFORM=offscreen python src/tests/test_native_lib.py`.
+- Tests (plain scripts, no pytest):
+  `QT_QPA_PLATFORM=offscreen python src/tests/test_captcha_auto_login.py`
+  `QT_QPA_PLATFORM=offscreen python src/tests/test_native_lib.py`
+- Build: `python build.py` (onedir), `--onefile`, `--versioned` (implies `--onefile`). `--version X` rewrites `_FALLBACK_VERSION` in `src/core/version.py` — check `git status` afterwards (build mutates the source file). `--versioned --version X` renames the onefile artifact to `NaukriProfileManager-<X>-<os>-<arch>`.
+- Every build runs `tools/verify_bundle.py` on the artifact and refuses to finish if it fails. The verifier checks httpcloak's native library is present *and* its whole dependency closure travels with it (Windows: `libgcc_s_seh-1.dll` + OpenSSL DLLs).
+- `httpcloak==1.7.3` is pinned in `requirements.txt` — the native file name and companion DLLs are a packaging contract. Bump deliberately, then rebuild and re-verify.
+- PyInstaller does not cross-compile; build per OS. `build.py` uses `--collect-all PySide6 --collect-all shiboken6 --collect-all playwright`, parks the Qt Designer plugin out of the bundle, and bundles `login_via_browser.py` via `--add-data`. `_version_info()` sanitizes Windows VERSIONINFO to strictly numeric 4-part values (PyInstaller evals it as Python).
 
 ## Wiring you can't infer from filenames
 
-- `src/main.py` entry is a `while True` loop — closing the window ends it; logout returns to `LoginDialog` via `MainWindow.relogin_requested` instead of exiting; the loop-local `prefill_email` carries the dead account into the next login. Keep the loop; don't simplify it away.
+- `src/main.py` is a `while True` loop — closing the window ends it; logout returns to `LoginDialog` via `MainWindow.relogin_requested` instead of exiting; the loop-local `prefill_email` carries the dead account into the next login. Keep the loop; don't simplify it away.
 - `src/main.py` inserts repo `ROOT` into `sys.path` so `src.*` imports work from the repo root and from the PyInstaller `_MEIPASS` bundle — keep it.
 - Layout: `src/core` (NaukriManager, ApiWorker, session/settings/credentials/update_check/version/AI/resume/native_lib/diagnostics + vendored NopeRi in `src/core/nope_ri`), `src/models`, `src/ui` (one module per tab). Vendored NopeRi uses **relative** imports (upstream absolute — re-apply on sync); mostly unused upstream cruft, leave alone.
-- App version: `src/core/version.py` reads `[project] version` from pyproject, falls back to `_FALLBACK_VERSION` when frozen; release CI bumps both — keep in sync.
+- App version: `src/core/version.py` reads `[project] version` from pyproject, falls back to `_FALLBACK_VERSION` when frozen; keep them in sync (`build.py --version` rewrites the fallback).
 
 ## Runtime gotchas
 
@@ -31,7 +34,7 @@ Cross-platform (Windows/macOS/Linux) PySide6 desktop app for viewing/updating a 
 
 - Read profile: `GET .../v2/users/self?expand_level=3` (`FULL_PROFILE_URL`) — rich payload under `profile[0]`. `fullprofiles` is **write-only** (GET 405/500) and is what updates POST to with `x-http-method-override: PUT`. The `PROFILE_FETCH_URL` constant in `nope_ri/config/constants.py` is dead, pointing at that write-only endpoint.
 - Position is NOT `role` — parsed from root `employments[]` (current entry, or latest by `startDate`) via `designation`.
-- Resume download: `GET .../v1/users/self/profiles/{pid}/resume` with `content-type: application/pdf` and **`Accept` left at `application/json`** (Accept: application/pdf → **406**). Require a `%PDF-` marker in the first 1 KiB or raise; a dead-but-not-yet-401 session answers with the HTML login page. 401/403 stay `NaukriAuthError`.
+- Resume download: `GET .../v1/users/self/profiles/{pid}/resume` with `content-type: application/pdf` and **`Accept` left at `application/json`** (`Accept: application/pdf` → **406**). Require a `%PDF-` marker in the first 1 KiB or raise; a dead-but-not-yet-401 session answers with the HTML login page. 401/403 stay `NaukriAuthError`.
 - formKey: scraped live via `get_form_key2()` from the `mnj_v<NNN>.min.js` bundle (`attachCV` pattern) — never hardcode; don't re-add the app-shell `formKey="..."` pattern or a hardcoded bundle URL/version.
 - `_fetch_js()` must use plain `requests` (httpcloak serves cached static assets as 304 with an **empty body**). Auth scheme: cloudgateway = Bearer; `/mnjapi/*` = cookie-only (Bearer → `401 4012 "Invalid scheme name"`).
 - Resume re-upload: `POST https://filevalidation.naukri.com/file` (multipart `formKey`/`file`/`fileName`/`uploadCallback`/`fileKey`; `appid: 105` + `systemid: fileupload` headers) then `POST .../resman-aggregator-services/v0/users/self/profiles/{pid}/advResume` with `x-http-method-override: PUT` and `{"textCV": {"formKey": ..., "fileKey": ...}}` → `200 {"status": true}`. URL template MUST be `.format(profile_id=pid)`; `_validate_file_request` MUST use the httpcloak session; 404 "OCS Service" = wrong fileKey/formKey pair; tokens 1h TTL, check `exp` first.
@@ -63,7 +66,7 @@ Cross-platform (Windows/macOS/Linux) PySide6 desktop app for viewing/updating a 
 
 ## Packaging
 
-- PyInstaller: no cross-compile; needs `--paths ROOT --windowed`; spec is generated and gitignored — edit `build.py`; install `PySide6-Essentials` not `PySide6`; keep `--collect-all PySide6 --collect-all shiboken6`; keep `--collect-all playwright`; keep Designer plugin parking in `build.py`.
+- PyInstaller: no cross-compile; build Windows on Windows, Linux on Linux, macOS on macOS. Install `PySide6-Essentials` not `PySide6`; needs `--paths ROOT --windowed`; spec is generated and gitignored — edit `build.py`; keep `--collect-all PySide6 --collect-all shiboken6 --collect-all playwright`; keep Designer plugin parking in `build.py`.
 - `build.py` bundles `login_via_browser.py` via `--add-data` so frozen builds can auto-capture the session cookie.
 - `_version_info()` sanitizer: Windows VERSIONINFO needs strictly numeric 4-part vers/prodvers; PyInstaller evals the file as Python — keep the sanitizer.
 - **httpcloak's native library is not collected by PyInstaller.** `build.py::_httpcloak_lib()` locates `libhttpcloak-<os>-<arch>.<ext>` (glob-tolerant) and bundles the whole `httpcloak/lib/` directory into `httpcloak/lib` — the exact path httpcloak's `_get_lib_path()` searches. It **raises `SystemExit` when the library is missing**: a bundle without it builds green and dies on the user's machine with "Could not find httpcloak library". Never downgrade that to a warning.
@@ -81,6 +84,11 @@ Cross-platform (Windows/macOS/Linux) PySide6 desktop app for viewing/updating a 
 
 ## CI / release
 
-- 4-job matrix (windows/ubuntu/macos-15-intel/macos-15 arm64, py3.12) runs `python build.py --onefile --versioned --version <NEXT>`; every push to `master` auto-releases; release job bumps version + `_FALLBACK_VERSION`, rewrites README version strings, commits `chore(release): v<NEXT> [skip ci]`, pushes tag, publishes via `gh release create`; duplicate-tag guard.
-- The Windows job also runs `python build.py` (onedir) and zips it with `shutil.make_archive` → `NaukriProfileManager-<ver>-windows-x86_64-ondir.zip`. The release job builds the Linux `.zip` with Python's `shutil.make_archive` (not the `zip` CLI, which isn't guaranteed on every runner).
-- Pin `actions/upload-artifact@v4.6.2+`; `gh run upload` doesn't exist. Expected noise: macOS Node 20 deprecation (→Node 24); Linux `libxcb-*.so` WARNINGs (non-fatal).
+- `.github/workflows/build.yml` runs on every push to `master` and via `workflow_dispatch` (optional `release` input to publish). 4-job matrix: windows-latest, ubuntu-latest, macos-15-intel, macos-15 (arm64), Python 3.12.
+- Each job: installs `requirements.txt` + pyinstaller, runs `python -m playwright install chromium`, verifies httpcloak's native library loads (`src/core.native_lib.ensure_native_lib`), runs the two smoke tests (`test_native_lib.py`, `test_captcha_auto_login.py` offscreen), computes the next minor version (`X.Y.0` → `X.(Y+1).0`), runs `python build.py --onefile --versioned --version <NEXT>`, verifies the artifact with `tools/verify_bundle.py`, then on Windows also builds a one-dir zip via `shutil.make_archive`. Uploads artifacts via `actions/upload-artifact@v4.6.2`.
+- A `release` job runs on push (not on `workflow_dispatch` unless `release` input is set), needs `contents: write`, duplicates tag guard (`git ls-remote --tags`), bumps `pyproject.toml` + `src/core/version.py` + README version strings, commits `chore(release): v<NEXT> [skip ci]`, tags `v<NEXT>`, pushes, then creates a GitHub Release via `gh release create`. The `[skip ci]` commit prevents re-triggering.
+- The Linux raw binary is also zipped (Python `shutil.make_archive`, not the `zip` CLI) since browsers stall on extensionless 90MB files.
+
+## Related
+
+- `SESSION-LEARNINGS.md` — captcha auto-login environment gotchas (recreate a broken `.venv`, QProcess cross-test test ordering). Most of it is already reflected above.
