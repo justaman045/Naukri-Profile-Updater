@@ -137,6 +137,41 @@ def find_native_lib() -> Path | None:
     return fallback
 
 
+def _companion_dirs() -> list[Path]:
+    """Directories that may provide companion DLLs (e.g. libwinpthread-1.dll).
+
+    httpcloak's MinGW build needs ``libwinpthread-1.dll`` at runtime, but that
+    DLL is not shipped inside the httpcloak package. Search PATH and a few
+    well-known MinGW locations so a source checkout can still load the library
+    when MinGW is installed on the machine.
+    """
+    wanted = {"libwinpthread-1.dll", "libgcc_s_seh-1.dll"}
+    result: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(directory: Path) -> None:
+        if not directory.is_dir():
+            return
+        if not any((directory / name).is_file() for name in wanted):
+            return
+        key = str(directory)
+        if key in seen:
+            return
+        seen.add(key)
+        result.append(directory)
+
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        _add(Path(entry))
+    for candidate in (
+        Path("C:/Program Files/Git/mingw64/bin"),
+        Path("C:/msys64/mingw64/bin"),
+        Path("C:/msys64/usr/bin"),
+        Path("C:/mingw64/bin"),
+    ):
+        _add(candidate)
+    return result
+
+
 def bootstrap_native_lib() -> Path | None:
     """Prepare the process so httpcloak can load its native library.
 
@@ -159,6 +194,11 @@ def bootstrap_native_lib() -> Path | None:
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
             directories.append(Path(meipass))
+        # Companion DLLs (libwinpthread-1.dll) may live in a MinGW bin dir
+        # rather than next to the library; register those dirs too.
+        for companion in _companion_dirs():
+            if companion not in directories:
+                directories.append(companion)
         for directory in directories:
             try:
                 _DLL_DIR_HANDLES.append(os.add_dll_directory(str(directory)))
@@ -168,6 +208,9 @@ def bootstrap_native_lib() -> Path | None:
                 # file itself, and PyInstaller's bootloader already puts the
                 # bundle root on the DLL search path.
                 pass
+        # Keep PATH in sync for LoadLibrary resolution.
+        extra = os.pathsep.join(str(d) for d in directories)
+        os.environ["PATH"] = extra + os.pathsep + os.environ.get("PATH", "")
 
     os.environ["HTTPCLOAK_LIB_PATH"] = str(path)
     _bootstrapped = True

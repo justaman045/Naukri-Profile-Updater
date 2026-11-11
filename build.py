@@ -191,6 +191,50 @@ def _httpcloak_lib() -> tuple[Path, Path]:
     )
 
 
+def _ensure_companion_dlls(bundle_source: Path) -> None:
+    """Make sure MinGW companion DLLs travel with the httpcloak bundle.
+
+    httpcloak's Windows build is linked against MinGW and needs
+    ``libwinpthread-1.dll`` (and ``libgcc_s_seh-1.dll``) at runtime. The
+    httpcloak wheel ships ``libgcc_s_seh-1.dll`` but not ``libwinpthread-1.dll``,
+    so a clean machine without MinGW on PATH fails to load the library. Copy any
+    missing companion from PATH / a known MinGW location into the bundle dir.
+    """
+    required = ("libwinpthread-1.dll",)
+    search_dirs: list[Path] = []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(entry)
+        if candidate.is_dir():
+            search_dirs.append(candidate)
+    for candidate in (
+        Path("C:/Program Files/Git/mingw64/bin"),
+        Path("C:/msys64/mingw64/bin"),
+        Path("C:/msys64/usr/bin"),
+        Path("C:/mingw64/bin"),
+    ):
+        if candidate.is_dir():
+            search_dirs.append(candidate)
+
+    for name in required:
+        target = bundle_source / name
+        if target.is_file():
+            continue
+        found: Path | None = None
+        for directory in search_dirs:
+            candidate = directory / name
+            if candidate.is_file():
+                found = candidate
+                break
+        if found is None:
+            raise SystemExit(
+                "ERROR: required companion DLL not found: "
+                f"{name}. Install MinGW (or Git for Windows) or place the DLL "
+                "on PATH, then rebuild."
+            )
+        shutil.copy2(found, target)
+        print(f"Copied companion DLL: {found} -> {target}")
+
+
 def _verify_artifact(artifact: Path) -> None:
     """Fail the build when the native library is missing from the artifact.
 
@@ -280,6 +324,9 @@ def build(*, onefile: bool, version: str, versioned: bool) -> Path:
                 print("No app.ico/app.icns/app.png found; skipping --icon.")
 
             lib_file, bundle_source = _httpcloak_lib()
+            bundle_source_path = Path(bundle_source)
+            if system == "Windows" and bundle_source_path.is_dir():
+                _ensure_companion_dlls(bundle_source_path)
             sep = ";" if system == "Windows" else ":"
             cmd += ["--add-binary", f"{bundle_source}{sep}httpcloak/lib"]
             print(f"Bundling httpcloak binary: {lib_file} -> httpcloak/lib")

@@ -142,17 +142,15 @@ def _is_api_set(name: str) -> bool:
     return lowered.startswith("api-ms-win-") or lowered.startswith("ext-ms-")
 
 
-def check_windows_dependencies(bundle: Bundle, member: str) -> list[str]:
-    """Return the DLLs the native library needs that the bundle is missing."""
+def _pe_imports(data: bytes) -> set[str]:
+    """Return the set of DLL names a PE file imports."""
     try:
         import pefile
     except ImportError:
-        print("  ! pefile is not installed — skipping the dependency check")
-        return []
-
+        return set()
     with tempfile.TemporaryDirectory() as tmp:
-        target = Path(tmp) / Path(member).name
-        target.write_bytes(bundle.read(member))
+        target = Path(tmp) / "lib.dll"
+        target.write_bytes(data)
         pe = pefile.PE(str(target), fast_load=True)
         pe.parse_data_directories(
             directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]]
@@ -162,15 +160,50 @@ def check_windows_dependencies(bundle: Bundle, member: str) -> list[str]:
             for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", [])
         }
         pe.close()
+    return imported
+
+
+def check_windows_dependencies(bundle: Bundle, member: str) -> list[str]:
+    """Return the DLLs the native library needs that the bundle is missing.
+
+    The check is recursive: a companion DLL (e.g. libgcc_s_seh-1.dll) may
+    itself depend on another non-system DLL (libwinpthread-1.dll) that the
+    top-level native library does not import directly.
+    """
+    try:
+        import pefile  # noqa: F401
+    except ImportError:
+        print("  ! pefile is not installed — skipping the dependency check")
+        return []
 
     present = bundle.basenames()
-    missing = []
-    for dll in sorted(imported):
-        if _is_api_set(dll) or dll in WINDOWS_SYSTEM_DLLS:
+    visited: set[str] = set()
+    to_check: list[str] = [member]
+    missing: set[str] = set()
+
+    while to_check:
+        current = to_check.pop()
+        if current in visited:
             continue
-        if dll not in present:
-            missing.append(dll)
-    return missing
+        visited.add(current)
+        try:
+            data = bundle.read(current)
+        except Exception:  # noqa: BLE001
+            continue
+        imported = _pe_imports(data)
+        for dll in imported:
+            if _is_api_set(dll) or dll in WINDOWS_SYSTEM_DLLS:
+                continue
+            if dll not in present:
+                missing.add(dll)
+                continue
+            dep_member = bundle.find(
+                lambda n, d=dll: PurePosixPath(n).name.lower() == d
+            )
+            if dep_member is not None and dep_member not in visited:
+                to_check.append(dep_member)
+
+    return sorted(missing)
 
 
 def check_posix_dependencies(bundle: Bundle, member: str, system: str) -> list[str]:

@@ -51,6 +51,21 @@ jobs:
       - name: Install Playwright browser
         run: python -m playwright install chromium
 
+      # Fail fast if httpcloak's native library (and its companions) cannot load
+      # on this runner - otherwise the build would ship a broken executable.
+      - name: Verify httpcloak native library loads
+        run: python -c "from src.core.native_lib import ensure_native_lib; print(ensure_native_lib())"
+
+      # Smoke tests (plain scripts, no pytest). Run before building so a
+      # regression in native-lib resolution or the captcha login flow breaks
+      # CI instead of a release.
+      - name: Run smoke tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python src/tests/test_native_lib.py
+          python src/tests/test_captcha_auto_login.py
+
       # Minor bump of the version in pyproject.toml (0.1.0 -> 0.2.0). All four
       # runners check out the same HEAD, so they compute the same version and the
       # artifact names line up for the release job.

@@ -11,7 +11,12 @@ _LEGACY_FORM_KEY_PATTERNS = (
 
 
 def extract_resume_form_key(js_text: str) -> str | None:
-    """Extract the profile resume uploader's formKey (`c="attachCV",d="<key>"`)."""
+    """Extract the profile resume uploader's formKey.
+
+    The resume uploader's config object carries `formKey:"<key>"` with
+    extensions including "pdf" (current SPA bundle), or the legacy
+    `c="attachCV",d="<key>"` shape.
+    """
     for pattern in RESUME_FORM_KEY_PATTERNS:
         match = pattern.search(js_text)
         if match:
@@ -22,13 +27,12 @@ def extract_resume_form_key(js_text: str) -> str | None:
 def extract_form_key2(js_text: str) -> str | None:
     """Best-effort resume formKey from an arbitrary bundle.
 
-    Deliberately does NOT consider the app-shell `formKey="..."` shape: that is
-    the chat uploader's key from `app_v<NNN>.min.js`, and submitting it makes
-    filevalidation return a honeypot key that `advResume` cannot resolve
-    (404 "Received 404 from OCS Service"). Returning None and failing loudly
-    beats returning a key that looks valid and silently breaks the upload.
+    Only the resume-uploader shapes are considered. The legacy
+    ``d="..."`` / ``initUploader`` patterns are intentionally excluded: they
+    match Naukri's honeypot key (``0123456789ABCDEF``) which makes
+    filevalidation succeed but advResume fail with 404 "OCS Service".
     """
-    for pattern in (*RESUME_FORM_KEY_PATTERNS, *_LEGACY_FORM_KEY_PATTERNS):
+    for pattern in RESUME_FORM_KEY_PATTERNS:
         match = pattern.search(js_text)
         if match:
             return match.group(1)

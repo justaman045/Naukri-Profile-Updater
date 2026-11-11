@@ -1,0 +1,3 @@
+https://static.naukimg.com/s/0/0/j/loggerSPA_v6.0.min.js len 43577
+https://static.naukimg.com/s/8/801/j/vendors~main.fb57defa.js len 3455388
+https://static.naukimg.com/s/8/801/j/main.4050cf40.js len 280480

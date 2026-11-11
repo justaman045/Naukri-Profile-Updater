@@ -1,0 +1,8 @@
+UPLOADCB in https://static.naukimg.com/s/8/801/j/vendors~main.fb57defa.js:
+DEFGHIJKLMNOPQRSTUVWXYZ",n=13;n>0;--n)e+=t[Math.round(61*Math.random())];return e}();return a.append("fileName",r.name.trim()),a.append("file",r),a.append("formKey",i),a.append("fileKey",o),a.append("uploadCallback",!1),Ne.post(e,{withCredentials:!1,headers:{Accept:"application/json",appId:153,systemid:"jobseeker"},body:a,apiTimeout:3e4}).then(function(e){return Be(),{fileName:r.name.trim(),fileKey:o}}).catch(f
+
+FORMKEY in https://static.naukimg.com/s/8/801/j/vendors~main.fb57defa.js:
+Opacity:le,strokeOpacity:le,numOctaves:fe};function pe(e,t,n,r,i,a,o,s){var c,l=e.style,u=e.vars,f=e.transform,d=e.transformKeys,p=e.transformOrigin;d.length=0;var h=!1,m=!1,v=!0;for(var g in t){var y=t[g];if(Y(g))u[g]=y;else{var b=de[g],x=Q(y,b);
+
+FORMKEY in https://static.naukimg.com/s/8/801/j/main.4050cf40.js:
+onstant.ncUploader||{saveFileUrl:D.Vth},window.appConstant.photoCropper=window.appConstant.photoCropper||{baseUrl:D.Plx,formKey:D.d7H.formKey}},(r=De(r="setPhotoUploaderConstants"))in n?Object.defineProperty(n,r,{value:o,enumerable:!0,configurable

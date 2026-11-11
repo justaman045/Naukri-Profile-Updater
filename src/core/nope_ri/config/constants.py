@@ -42,7 +42,14 @@ K6LgzJhmLhN7B5yuEyaKoasgXQk3+OQglsOaBxEJ0j5PcTL3nbOvt80CAwEAAQ==
 # `app_v*.min.js` scraper: the only way to reach that key was the deleted
 # `get_form_key()`, which returned the honeypot key. Don't reintroduce it.
 RESUME_FORM_KEY_PATTERNS = [
+    # Legacy profile bundle: `c="attachCV",d="<key>"`.
     re.compile(r'["\']attachCV["\']\s*,\s*[A-Za-z_$][\w$]*\s*=\s*["\']([A-Za-z0-9]{8,})["\']'),
+    # Current SPA bundle: the resume uploader's config object carries
+    # `formKey:"<key>"` with extensions including "pdf".
+    re.compile(
+        r'formKey\s*:\s*["\']([A-Za-z0-9]{6,})["\'][^}]*extensions\s*:\s*\[[^\]]*"pdf"',
+        re.IGNORECASE | re.DOTALL,
+    ),
 ]
 
 # The app bundle carries a version map: `_c={app:"_v470",mnj:"_v323",...}`.
