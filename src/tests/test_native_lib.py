@@ -166,6 +166,15 @@ def test_verify_bundle_accepts_a_complete_bundle(tmp_path):
     for sibling in source.parent.glob("*"):
         if sibling.is_file():
             shutil.copy2(sibling, lib_dir / sibling.name)
+    # On Windows, libwinpthread-1.dll lives on PATH/MinGW, not in httpcloak's
+    # lib dir. Copy it in too so verify_bundle.py's recursive dependency check
+    # finds a complete bundle.
+    if sys.platform == "win32":
+        for entry in os.environ.get("PATH", "").split(os.pathsep):
+            candidate = Path(entry) / "libwinpthread-1.dll"
+            if candidate.is_file():
+                shutil.copy2(candidate, lib_dir / candidate.name)
+                break
 
     assert verifier.verify(bundle, "linux", "x86_64") == 0
 
