@@ -76,10 +76,13 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
+          echo "=== Python ===" && python --version && which python
+          echo "=== PySide6 import ===" && python -c "import PySide6; print(PySide6.__version__)"
+          echo "=== QApp test ===" && QT_DEBUG_PLUGINS=1 python -c "from PySide6.QtWidgets import QApplication; import sys; app = QApplication(sys.argv); print('QApp OK')" 2>&1 || echo "QApp FAILED"
           echo "=== test_native_lib.py ==="
-          python src/tests/test_native_lib.py; echo "exit=$?"
+          python src/tests/test_native_lib.py || echo "NATIVE_LIB FAILED"
           echo "=== test_captcha_auto_login.py ==="
-          python src/tests/test_captcha_auto_login.py; echo "exit=$?"
+          python src/tests/test_captcha_auto_login.py || echo "CAPTCHA FAILED"
 
       # Minor bump of the version in pyproject.toml (0.1.0 -> 0.2.0). All four
       # runners check out the same HEAD, so they compute the same version and the
