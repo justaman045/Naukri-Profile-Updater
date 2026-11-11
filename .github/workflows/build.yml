@@ -79,7 +79,7 @@ jobs:
       - name: "Run smoke test: captcha auto-login"
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python src/tests/test_captcha_auto_login.py
+        run: python -X faulthandler src/tests/test_captcha_auto_login.py 2>&1 | tee captcha-test.log || (cat captcha-test.log; exit 1)
 
       # Minor bump of the version in pyproject.toml (0.1.0 -> 0.2.0). All four
       # runners check out the same HEAD, so they compute the same version and the
