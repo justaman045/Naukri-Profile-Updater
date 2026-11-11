@@ -159,9 +159,13 @@ def test_verify_bundle_accepts_a_complete_bundle(tmp_path):
         return
 
     bundle = tmp_path / "NaukriProfileManager-complete"
-    target = bundle / "httpcloak" / "lib" / source.name
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    lib_dir = bundle / "httpcloak" / "lib"
+    lib_dir.mkdir(parents=True, exist_ok=True)
+    # Copy every DLL/SO from httpcloak's lib dir (native lib + companion DLLs)
+    # so the dependency-closure check passes on Windows too.
+    for sibling in source.parent.glob("*"):
+        if sibling.is_file():
+            shutil.copy2(sibling, lib_dir / sibling.name)
 
     assert verifier.verify(bundle, "linux", "x86_64") == 0
 
